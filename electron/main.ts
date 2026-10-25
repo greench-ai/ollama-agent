@@ -158,6 +158,23 @@ function forwardAgentEvent(event: AgentEvent): void {
     case "notice":
       sendEvent("notice", { text: event.text });
       break;
+    case "subagent_start":
+      sendEvent("subagent_start", {
+        name: event.name,
+        description: event.description,
+        subagentType: event.subagentType,
+        model: event.model,
+      });
+      break;
+    case "subagent_end":
+      sendEvent("subagent_end", {
+        name: event.name,
+        description: event.description,
+        subagentType: event.subagentType,
+        ok: event.ok,
+        messages: event.messages,
+      });
+      break;
     case "error":
       sendEvent("error", { message: event.message });
       break;

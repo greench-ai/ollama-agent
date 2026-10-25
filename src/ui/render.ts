@@ -88,6 +88,22 @@ export class TerminalRenderer {
         process.stdout.write(`${style.yellow("•")} ${style.dim(event.text)}\n`);
         break;
 
+      case "subagent_start":
+        this.ensureNewline();
+        process.stdout.write(
+          `${style.magenta("◎")} ${style.bold(event.name)} ` +
+            `${style.dim(`(${event.subagentType})`)} ${event.description}\n`,
+        );
+        break;
+
+      case "subagent_end":
+        this.ensureNewline();
+        process.stdout.write(
+          `${event.ok ? style.magenta("◎") : style.red("◎")} ${style.bold(event.name)} ` +
+            `${style.dim(event.ok ? "done" : "failed")}\n`,
+        );
+        break;
+
       case "error":
         this.ensureNewline();
         process.stdout.write(`${style.red("✗")} ${event.message}\n`);

@@ -163,6 +163,14 @@
       case "notice":
         addNotice(data.text);
         break;
+      case "subagent_start":
+        addNotice(
+          "subagent " + data.name + " (" + data.subagentType + ") · " + data.description,
+        );
+        break;
+      case "subagent_end":
+        addNotice("subagent " + data.name + (data.ok ? " finished" : " failed"));
+        break;
       case "error":
         addError(data.message);
         break;

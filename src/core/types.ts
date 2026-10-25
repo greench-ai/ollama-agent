@@ -63,6 +63,24 @@ export interface ToolContext {
   signal: AbortSignal;
   todos: TodoItem[];
   log: (line: string) => void;
+  /** Provided by the Agent; absent when tools are run standalone. */
+  spawnSubagent?: (request: SubagentRequest) => Promise<SubagentResult>;
+}
+
+export type SubagentType = "general-purpose" | "explore" | "plan";
+
+export interface SubagentRequest {
+  description: string;
+  prompt: string;
+  subagentType?: SubagentType;
+  model?: string;
+  name?: string;
+  maxTurns?: number;
+}
+
+export interface SubagentResult {
+  content: string;
+  isError?: boolean;
 }
 
 export interface ToolResult {

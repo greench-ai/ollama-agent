@@ -228,6 +228,23 @@ async function main(): Promise<void> {
         case "notice":
           stream.send("notice", { text: event.text });
           break;
+        case "subagent_start":
+          stream.send("subagent_start", {
+            name: event.name,
+            description: event.description,
+            subagentType: event.subagentType,
+            model: event.model,
+          });
+          break;
+        case "subagent_end":
+          stream.send("subagent_end", {
+            name: event.name,
+            description: event.description,
+            subagentType: event.subagentType,
+            ok: event.ok,
+            messages: event.messages,
+          });
+          break;
         case "error":
           stream.send("error", { message: event.message });
           break;

@@ -6,6 +6,7 @@ import { bashTool } from "./bash.ts";
 import { globTool } from "./glob.ts";
 import { grepTool } from "./grep.ts";
 import { todoTool } from "./todo.ts";
+import { taskTool } from "./task.ts";
 
 export const allTools: Tool[] = [
   readTool,
@@ -16,6 +17,7 @@ export const allTools: Tool[] = [
   globTool,
   grepTool,
   todoTool,
+  taskTool,
 ];
 
 export function getTool(name: string): Tool | undefined {
@@ -31,4 +33,5 @@ export {
   globTool,
   grepTool,
   todoTool,
+  taskTool,
 };

@@ -51,6 +51,25 @@ Environment variables: `OLLAMA_HOST`, `OLLAMA_API_KEY`, `OLLAMA_MODEL`.
 | `plan` | read-only only; mutating tools are denied |
 | `bypassPermissions` | everything runs |
 
+## Subagents
+
+The `Task` tool launches a child agent with its own context, session file, and
+tool set. Only its final report returns to the parent, so intermediate output
+never consumes the main conversation.
+
+- `general-purpose` — all tools except `Task`
+- `explore` / `plan` — read-only tools only
+- Nesting is capped at one level; a child never receives `Task`
+- The child inherits the permission mode (approvals still prompt) and the
+  parent's model unless `model` is set
+- Progress is surfaced as `subagent_start` / `subagent_end` events, plus a
+  notice for each child tool call
+- Child transcripts are stored as `<parent-session>-<name>.jsonl`
+
+```
+Task(description: "Find auth code", prompt: "…", subagent_type: "explore", name: "scout")
+```
+
 ## MCP servers
 
 MCP servers use a Claude-compatible `mcpServers` object. The CLI looks for
@@ -107,9 +126,10 @@ HTTP API:
 | POST | `/api/reset` | clear the conversation |
 
 SSE events: `start`, `thinking`, `text`, `tool_start`, `tool_end`, `notice`,
-`error`, `approval`, `step`, `done` (with `used`/`budget`). The bundled web
-client (`web/index.html`) renders streaming text, thinking, tool cards, and
-approval prompts. It is deliberately plain — the shell comes later.
+`subagent_start`, `subagent_end`, `error`, `approval`, `step`, `done` (with
+`used`/`budget`). The bundled web client (`web/index.html`) renders streaming
+text, thinking, tool cards, subagent progress, and approval prompts. It is
+deliberately plain — the shell comes later.
 
 ## Desktop shell (Electron)
 
@@ -200,10 +220,10 @@ electron-builder creates a draft release by default; publish it in the GitHub UI
 
 ## Status
 
-Early. Implemented: streaming, tool loop, permissions, sessions, 7 built-in
-tools, an MCP client (stdio + Streamable HTTP; tools, resources, prompts,
-pagination, annotations, reconnect), a local HTTP/SSE server with a web client,
-an Electron shell with a sandboxed renderer, IPC approvals, CSP, window-state
-persistence, menus, Linux packaging (AppImage + deb), and electron-updater
-wiring. Not yet: subagents, image input, OAuth for HTTP MCP servers, and a
-plan-mode editing workflow.
+Early. Implemented: streaming, tool loop, permissions, sessions, 8 built-in
+tools (including `Task` subagents with isolated context), an MCP client (stdio +
+Streamable HTTP; tools, resources, prompts, pagination, annotations, reconnect),
+a local HTTP/SSE server with a web client, an Electron shell with a sandboxed
+renderer, IPC approvals, CSP, window-state persistence, menus, Linux packaging
+(AppImage + deb), and electron-updater wiring. Not yet: image input, OAuth for
+HTTP MCP servers, and a plan-mode editing workflow.

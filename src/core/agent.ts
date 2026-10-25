@@ -2,6 +2,9 @@ import type {
   ContentBlock,
   Message,
   Provider,
+  SubagentRequest,
+  SubagentResult,
+  SubagentType,
   Tool,
   ToolCall,
   ToolContext,
@@ -11,7 +14,7 @@ import type {
 } from "./types.ts";
 import { PermissionEngine, summarizeToolInput, toolsForMode } from "./permissions.ts";
 import { compactMessages, estimateMessages } from "./tokens.ts";
-import type { Session } from "./session.ts";
+import { Session } from "./session.ts";
 
 export type AgentEvent =
   | { type: "text"; text: string }
@@ -21,7 +24,22 @@ export type AgentEvent =
   | { type: "notice"; text: string }
   | { type: "usage"; usage: Usage }
   | { type: "turn_end" }
-  | { type: "error"; message: string };
+  | { type: "error"; message: string }
+  | {
+      type: "subagent_start";
+      name: string;
+      description: string;
+      subagentType: string;
+      model: string;
+    }
+  | {
+      type: "subagent_end";
+      name: string;
+      description: string;
+      subagentType: string;
+      ok: boolean;
+      messages: number;
+    };
 
 export interface AgentOptions {
   provider: Provider;
@@ -38,6 +56,9 @@ export interface AgentOptions {
   maxToolResultChars?: number;
   messages?: Message[];
   signal?: AbortSignal;
+  /** Nesting depth; subagents start at 1. */
+  depth?: number;
+  maxDepth?: number;
   onEvent?: (event: AgentEvent) => void;
 }
 
@@ -59,6 +80,9 @@ export class Agent {
   messages: Message[];
   todos: TodoItem[] = [];
   signal?: AbortSignal;
+  depth: number;
+  maxDepth: number;
+  private subagentCounter = 0;
   private onEvent: (event: AgentEvent) => void;
 
   constructor(options: AgentOptions) {
@@ -76,6 +100,8 @@ export class Agent {
     this.maxToolResultChars = options.maxToolResultChars ?? 30_000;
     this.messages = options.messages ? [...options.messages] : [];
     this.signal = options.signal;
+    this.depth = options.depth ?? 0;
+    this.maxDepth = options.maxDepth ?? 1;
     this.onEvent = options.onEvent ?? (() => {});
   }
 
@@ -237,6 +263,7 @@ export class Agent {
       signal: controller.signal,
       todos: this.todos,
       log: (line) => this.onEvent({ type: "notice", text: line }),
+      spawnSubagent: (request) => this.spawnSubagent(request),
     };
 
     let content: string;
@@ -269,6 +296,97 @@ export class Agent {
     };
   }
 
+  /**
+   * Run a delegated task in a fresh Agent. The child gets its own message
+   * history and session file, so intermediate output never enters the parent
+   * context; only its final report is returned. `Task` is removed from the
+   * child's tool set, which caps nesting at one level.
+   */
+  private async spawnSubagent(request: SubagentRequest): Promise<SubagentResult> {
+    if (this.depth >= this.maxDepth) {
+      return {
+        content: "Subagents cannot spawn further subagents.",
+        isError: true,
+      };
+    }
+
+    const subagentType: SubagentType = request.subagentType ?? "general-purpose";
+    const readOnly = subagentType === "explore" || subagentType === "plan";
+    const rawName = request.name?.trim() || `sub-${this.subagentCounter + 1}`;
+    this.subagentCounter += 1;
+    const name = rawName.replace(/[^A-Za-z0-9._-]+/g, "-");
+    const model = request.model?.trim() || this.model;
+
+    const childTools = this.tools.filter(
+      (tool) => tool.name !== "Task" && (!readOnly || !tool.mutating),
+    );
+    const childSession = await Session.create({
+      cwd: this.cwd,
+      model,
+      id: `${this.session.id}-${name}`,
+    });
+
+    this.onEvent({
+      type: "subagent_start",
+      name,
+      description: request.description,
+      subagentType,
+      model,
+    });
+
+    const child = new Agent({
+      provider: this.provider,
+      model,
+      tools: childTools,
+      permissions: this.permissions,
+      session: childSession,
+      cwd: this.cwd,
+      system: subagentSystemPrompt(this.cwd, subagentType, request.description),
+      think: false,
+      numCtx: this.numCtx,
+      temperature: this.temperature,
+      maxTurns: request.maxTurns ?? 25,
+      maxToolResultChars: this.maxToolResultChars,
+      depth: this.depth + 1,
+      maxDepth: this.maxDepth,
+      onEvent: (event) => {
+        if (event.type === "tool_start") {
+          this.onEvent({
+            type: "notice",
+            text: `[${name}] ${event.name}${event.summary ? `: ${event.summary}` : ""}`,
+          });
+        } else if (event.type === "error") {
+          this.onEvent({ type: "notice", text: `[${name}] error: ${event.message}` });
+        }
+      },
+    });
+
+    try {
+      await child.run(request.prompt);
+      const report = lastAssistantText(child.messages);
+      this.onEvent({
+        type: "subagent_end",
+        name,
+        description: request.description,
+        subagentType,
+        ok: true,
+        messages: child.messages.length,
+      });
+      return { content: report || "Subagent finished without a final report." };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.onEvent({
+        type: "subagent_end",
+        name,
+        description: request.description,
+        subagentType,
+        ok: false,
+        messages: child.messages.length,
+      });
+      return { content: message, isError: true };
+    }
+  }
+
   /** Approximate context usage for the status line. */
   contextUsage(): { used: number; budget: number } {
     return { used: estimateMessages(this.messages), budget: this.contextBudget() };
@@ -279,4 +397,37 @@ export class Agent {
     this.messages = [];
     this.todos = [];
   }
+}
+
+function lastAssistantText(messages: Message[]): string {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    if (messages[index].role !== "assistant") continue;
+    const text = messages[index].content
+      .filter((block) => block.type === "text")
+      .map((block) => (block.type === "text" ? block.text : ""))
+      .join("\n")
+      .trim();
+    if (text) return text;
+  }
+  return "";
+}
+
+function subagentSystemPrompt(
+  cwd: string,
+  type: SubagentType,
+  description: string,
+): string {
+  const readOnly = type === "explore" || type === "plan";
+  return `You are a ${type} subagent launched by a coding agent, working on one delegated task.
+
+Task: ${description}
+
+Environment
+- Working directory: ${cwd}
+${readOnly ? "- Read-only: you may not modify files or run mutating commands.\n" : ""}
+Rules
+- Use absolute file paths.
+- Work autonomously; do not ask the user questions.
+- Stay scoped to the delegated task.
+- End with a concise report: findings, file paths, changes made (if any), and anything unresolved.`;
 }
