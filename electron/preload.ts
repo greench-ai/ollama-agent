@@ -20,6 +20,7 @@ const bridge = {
 
   chat: async (
     message: string,
+    images: Array<{ data: string; mimeType: string; name?: string }>,
     onEvent: (event: string, data: unknown) => void,
   ): Promise<unknown> => {
     const listener = (_event: IpcRendererEvent, payload: EventPayload) => {
@@ -27,7 +28,7 @@ const bridge = {
     };
     ipcRenderer.on("agent:event", listener);
     try {
-      return await ipcRenderer.invoke("agent:chat", { message });
+      return await ipcRenderer.invoke("agent:chat", { message, images });
     } finally {
       ipcRenderer.removeListener("agent:event", listener);
     }

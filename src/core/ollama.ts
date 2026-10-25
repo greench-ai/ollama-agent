@@ -20,6 +20,7 @@ export interface OllamaConfig {
 type OllamaMessage = {
   role: "system" | "user" | "assistant" | "tool";
   content: string;
+  images?: string[];
   tool_name?: string;
   tool_calls?: Array<{ function: { name: string; arguments: unknown } }>;
 };
@@ -48,12 +49,28 @@ export function toOllamaMessages(
     if (message.role === "user") {
       const toolResults = message.content.filter((b) => b.type === "tool_result");
       if (toolResults.length > 0) {
+        const toolImages: Array<{ data: string; name?: string; tool?: string }> = [];
         for (const block of toolResults) {
           if (block.type !== "tool_result") continue;
           out.push({
             role: "tool",
             content: block.content,
             ...(block.name ? { tool_name: block.name } : {}),
+          });
+          for (const image of block.images ?? []) {
+            toolImages.push({ data: image.data, name: image.name, tool: block.name });
+          }
+        }
+        // Ollama attaches images to user messages, not tool messages. Append a
+        // user turn so the model can see images returned by a tool.
+        if (toolImages.length > 0) {
+          const label = toolImages
+            .map((image, index) => `${image.name ?? `image ${index + 1}`}${image.tool ? ` (from ${image.tool})` : ""}`)
+            .join(", ");
+          out.push({
+            role: "user",
+            content: `Images returned by tool results: ${label}`,
+            images: toolImages.map((image) => image.data),
           });
         }
         continue;
@@ -62,7 +79,14 @@ export function toOllamaMessages(
         .filter((b) => b.type === "text")
         .map((b) => (b.type === "text" ? b.text : ""))
         .join("\n");
-      out.push({ role: "user", content: text });
+      const images = message.content
+        .filter((b) => b.type === "image")
+        .map((b) => (b.type === "image" ? b.data : ""));
+      out.push({
+        role: "user",
+        content: text,
+        ...(images.length > 0 ? { images } : {}),
+      });
       continue;
     }
 

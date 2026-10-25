@@ -136,12 +136,32 @@
       .approval .done { color: var(--muted); font-size: 13px; }
       form {
         display: flex;
-        gap: 10px;
+        flex-direction: column;
+        gap: 8px;
         padding: 12px 16px 16px;
         border-top: 1px solid var(--border);
         background: var(--surface);
-        align-items: flex-end;
       }
+      .composer-row { display: flex; gap: 10px; align-items: flex-end; }
+      button.attach { cursor: pointer; padding: 10px 12px; color: var(--muted); }
+      .previews { display: flex; gap: 8px; flex-wrap: wrap; }
+      .previews .chip { position: relative; }
+      .previews img { height: 64px; border-radius: 6px; border: 1px solid var(--border); display: block; }
+      .previews button {
+        position: absolute;
+        top: -6px;
+        right: -6px;
+        width: 20px;
+        height: 20px;
+        padding: 0;
+        border-radius: 50%;
+        line-height: 1;
+        font-size: 12px;
+        background: var(--surface-2);
+        cursor: pointer;
+      }
+      .msg.user .thumbs { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 8px; }
+      .msg.user .thumbs img { max-height: 140px; border-radius: 6px; display: block; }
       textarea {
         flex: 1;
         resize: none;
@@ -182,8 +202,19 @@
     <main id="log"></main>
 
     <form id="composer">
-      <textarea id="input" rows="1" placeholder="Ask the agent…  (Enter to send, Shift+Enter for newline)"></textarea>
-      <button class="send" id="send" type="submit">Send</button>
+      <div id="previews" class="previews"></div>
+      <div class="composer-row">
+        <button type="button" class="attach" id="attach" title="Attach images">Attach</button>
+        <input
+          type="file"
+          id="file"
+          accept="image/png,image/jpeg,image/webp,image/gif,image/bmp"
+          multiple
+          hidden
+        />
+        <textarea id="input" rows="1" placeholder="Ask the agent…  (Enter to send, Shift+Enter for newline)"></textarea>
+        <button class="send" id="send" type="submit">Send</button>
+      </div>
     </form>
 
     <script src="./browser-bridge.js"></script>

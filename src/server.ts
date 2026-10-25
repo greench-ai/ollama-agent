@@ -5,6 +5,8 @@ import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 import { Agent, type AgentEvent } from "./core/agent.ts";
+import { MAX_IMAGES, validateImageAttachment } from "./core/images.ts";
+import type { ImageAttachment } from "./core/types.ts";
 import { OllamaProvider } from "./core/ollama.ts";
 import {
   PERMISSION_MODES,
@@ -353,6 +355,21 @@ async function main(): Promise<void> {
           return;
         }
 
+        const rawImages = Array.isArray(body.images) ? body.images : [];
+        if (rawImages.length > MAX_IMAGES) {
+          json(response, 400, { error: `At most ${MAX_IMAGES} images per message.` });
+          return;
+        }
+        let images: ImageAttachment[];
+        try {
+          images = rawImages.map((value) => validateImageAttachment(value));
+        } catch (error) {
+          json(response, 400, {
+            error: error instanceof Error ? error.message : String(error),
+          });
+          return;
+        }
+
         busy = true;
         response.writeHead(200, {
           "content-type": "text/event-stream; charset=utf-8",
@@ -371,7 +388,7 @@ async function main(): Promise<void> {
 
         send("start", { model: agent.model, mode: permissions.mode });
         try {
-          await agent.run(message);
+          await agent.run(message, images.length > 0 ? images : undefined);
         } catch (error) {
           send("error", {
             message: error instanceof Error ? error.message : String(error),

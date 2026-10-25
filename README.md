@@ -38,7 +38,15 @@ Environment variables: `OLLAMA_HOST`, `OLLAMA_API_KEY`, `OLLAMA_MODEL`.
 /model <name>              switch model
 /mode <name>               default | acceptEdits | plan | bypassPermissions
 /think [on|off]            toggle reasoning stream
-/clear                     clear the conversation
+/image <path>              attach an image to the next message
+/images                    list staged images
+/mcp [reconnect <server>]  list MCP servers, or reconnect one
+/resources                 list MCP resources
+/resource <server> <uri>   read an MCP resource
+/prompts                   list MCP prompts
+/prompt <server> <name>    run an MCP prompt
+/clear                     clear the conversation and staged images
+/session                   show the session file
 /exit                      quit
 ```
 
@@ -50,6 +58,30 @@ Environment variables: `OLLAMA_HOST`, `OLLAMA_API_KEY`, `OLLAMA_MODEL`.
 | `acceptEdits` | Write/Edit/Todo are auto-approved; Bash still asks |
 | `plan` | read-only only; mutating tools are denied |
 | `bypassPermissions` | everything runs |
+
+## Images
+
+Images can enter a conversation three ways:
+
+- **User attachments** — `/image <path>` in the CLI stages images for the next
+  message; the web UI has an Attach button and accepts pasted images; HTTP and
+  IPC clients send an `images` array.
+- **Read tool** — reading a `.png`, `.jpg`, `.jpeg`, `.webp`, `.gif`, or `.bmp`
+  returns the image as an attachment instead of a text description.
+- **MCP tools** — image blocks in MCP tool results are forwarded.
+
+Ollama attaches images to user messages, so tool-result images are replayed as a
+follow-up user message (`Images returned by tool results: …`) after the tool
+messages. Limits: 10 MB per image, 8 images per message. The model must be
+vision-capable (`ollama show <model>` lists `vision` in capabilities) — for
+example `d1-3b`, `qwen2.5vl:7b`, or a cloud vision model.
+
+```bash
+node src/index.ts --model d1-3b:latest
+› /image screenshot.png
+image attached: screenshot.png (image/png, ~240 KB) · 1 staged
+› What is wrong with this UI?
+```
 
 ## Subagents
 
@@ -121,7 +153,7 @@ HTTP API:
 | GET | `/api/state` | model, mode, cwd, session, MCP servers/resources/prompts |
 | GET | `/api/models` | models and the current one |
 | POST | `/api/state` | change `model` and/or `mode` |
-| POST | `/api/chat` | run a turn; streams SSE events |
+| POST | `/api/chat` | run a turn; body `{message, images?}`; streams SSE events |
 | POST | `/api/approve` | answer an `approval` event (`id`, `decision`) |
 | POST | `/api/reset` | clear the conversation |
 
@@ -221,9 +253,10 @@ electron-builder creates a draft release by default; publish it in the GitHub UI
 ## Status
 
 Early. Implemented: streaming, tool loop, permissions, sessions, 8 built-in
-tools (including `Task` subagents with isolated context), an MCP client (stdio +
+tools (including `Task` subagents with isolated context), image input (user
+attachments, Read on images, MCP image results), an MCP client (stdio +
 Streamable HTTP; tools, resources, prompts, pagination, annotations, reconnect),
 a local HTTP/SSE server with a web client, an Electron shell with a sandboxed
 renderer, IPC approvals, CSP, window-state persistence, menus, Linux packaging
-(AppImage + deb), and electron-updater wiring. Not yet: image input, OAuth for
-HTTP MCP servers, and a plan-mode editing workflow.
+(AppImage + deb), and electron-updater wiring. Not yet: OAuth for HTTP MCP
+servers and the plan-mode propose/apply workflow.

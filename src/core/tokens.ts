@@ -12,6 +12,9 @@ function blockTokens(block: ContentBlock): number {
       return estimateTokens(block.text);
     case "thinking":
       return estimateTokens(block.thinking);
+    case "image":
+      // Vision encoders vary; budget a flat allowance per image.
+      return 1_000;
     case "tool_use":
       return estimateTokens(block.name) + estimateTokens(JSON.stringify(block.input));
     case "tool_result":

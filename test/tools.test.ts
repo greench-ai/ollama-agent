@@ -89,6 +89,24 @@ test("TodoWrite replaces and renders the list", async () => {
   assert.equal(ctx.todos.length, 2);
 });
 
+test("Read returns image attachments for image files", async () => {
+  const cwd = await mkdtemp(path.join(tmpdir(), "agent-test-"));
+  const ctx = context(cwd);
+  const file = path.join(cwd, "pixel.png");
+  // 1x1 transparent PNG.
+  const png = Buffer.from(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9Z4xQAAAAASUVORK5CYII=",
+    "base64",
+  );
+  await writeFile(file, png);
+
+  const result = await readTool.run({ file_path: file }, ctx);
+  assert.match(result.content, /image "pixel\.png"/);
+  assert.equal(result.images?.length, 1);
+  assert.equal(result.images?.[0].mimeType, "image/png");
+  assert.equal(result.images?.[0].data, png.toString("base64"));
+});
+
 test("Glob and Grep find a file and its content", async () => {
   const cwd = await mkdtemp(path.join(tmpdir(), "agent-test-"));
   const ctx = context(cwd);

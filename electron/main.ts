@@ -6,6 +6,8 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
 import { Agent, type AgentEvent } from "../src/core/agent.ts";
+import { MAX_IMAGES, validateImageAttachment } from "../src/core/images.ts";
+import type { ImageAttachment } from "../src/core/types.ts";
 import { OllamaProvider } from "../src/core/ollama.ts";
 import {
   PERMISSION_MODES,
@@ -284,10 +286,24 @@ function registerIpc(): void {
     const message = typeof body.message === "string" ? body.message.trim() : "";
     if (!message) throw new Error("Missing message.");
     if (message.length > 200_000) throw new Error("Message is too long.");
+
+    const rawImages = Array.isArray(body.images) ? body.images : [];
+    if (rawImages.length > MAX_IMAGES) {
+      throw new Error(`At most ${MAX_IMAGES} images per message.`);
+    }
+    let images: ImageAttachment[];
+    try {
+      images = rawImages.map((value) => validateImageAttachment(value));
+    } catch (error) {
+      throw new Error(
+        `Invalid image: ${error instanceof Error ? error.message : error}`,
+      );
+    }
+
     busy = true;
     sendEvent("start", { model: agent.model, mode: permissions.mode });
     try {
-      await agent.run(message);
+      await agent.run(message, images.length > 0 ? images : undefined);
     } finally {
       sendEvent("done", agent.contextUsage());
       busy = false;
@@ -462,10 +478,25 @@ async function createWindow(): Promise<void> {
         );
         console.log("[electron] ipc state:", stateInfo);
         if (process.env.AGENT_SMOKE_CHAT) {
+          const imagePath = process.env.AGENT_SMOKE_IMAGE;
+          const prompt = imagePath
+            ? "What number is shown? Answer with just the number."
+            : "Reply with exactly: ipc ok";
+          let images = "[]";
+          if (imagePath) {
+            const buffer = await readFile(imagePath);
+            images = JSON.stringify([
+              {
+                data: buffer.toString("base64"),
+                mimeType: "image/png",
+                name: path.basename(imagePath),
+              },
+            ]);
+          }
           const chat = await mainWindow?.webContents.executeJavaScript(`
             new Promise((resolve) => {
               let text = "";
-              window.agentBridge.chat("Reply with exactly: ipc ok", (event, data) => {
+              window.agentBridge.chat(${JSON.stringify(prompt)}, ${images}, (event, data) => {
                 if (event === "text") text += data.text;
                 if (event === "done") resolve(JSON.stringify({ text }));
               }).catch((error) => resolve("error: " + error.message));

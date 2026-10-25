@@ -18,6 +18,17 @@ export interface ThinkingBlock {
   thinking: string;
 }
 
+export interface ImageAttachment {
+  /** Base64-encoded bytes, without a data: prefix. */
+  data: string;
+  mimeType: string;
+  name?: string;
+}
+
+export interface ImageBlock extends ImageAttachment {
+  type: "image";
+}
+
 export interface ToolUseBlock {
   type: "tool_use";
   id: string;
@@ -32,11 +43,14 @@ export interface ToolResultBlock {
   name?: string;
   content: string;
   is_error?: boolean;
+  /** Images returned by the tool (e.g. Read on a screenshot). */
+  images?: ImageAttachment[];
 }
 
 export type ContentBlock =
   | TextBlock
   | ThinkingBlock
+  | ImageBlock
   | ToolUseBlock
   | ToolResultBlock;
 
@@ -86,6 +100,8 @@ export interface SubagentResult {
 export interface ToolResult {
   content: string;
   isError?: boolean;
+  /** Images the model should see alongside the text result. */
+  images?: ImageAttachment[];
 }
 
 export interface Tool {

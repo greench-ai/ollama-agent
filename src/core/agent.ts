@@ -1,5 +1,6 @@
 import type {
   ContentBlock,
+  ImageAttachment,
   Message,
   Provider,
   SubagentRequest,
@@ -110,11 +111,12 @@ export class Agent {
     return Math.max(4_000, Math.floor(window * 0.75));
   }
 
-  async run(userText: string): Promise<void> {
-    const userMessage: Message = {
-      role: "user",
-      content: [{ type: "text", text: userText }],
-    };
+  async run(userText: string, images?: ImageAttachment[]): Promise<void> {
+    const content: ContentBlock[] = [{ type: "text", text: userText }];
+    for (const image of images ?? []) {
+      content.push({ type: "image", ...image });
+    }
+    const userMessage: Message = { role: "user", content };
     this.messages.push(userMessage);
     await this.session.appendMessage(userMessage);
 
@@ -268,10 +270,12 @@ export class Agent {
 
     let content: string;
     let isError = false;
+    let images: ImageAttachment[] | undefined;
     try {
       const result = await tool.run(call.input, context);
       content = result.content;
       isError = result.isError ?? false;
+      images = result.images;
     } catch (error) {
       content = error instanceof Error ? error.message : String(error);
       isError = true;
@@ -293,6 +297,7 @@ export class Agent {
       name: tool.name,
       content,
       is_error: isError,
+      ...(images && images.length > 0 ? { images } : {}),
     };
   }
 

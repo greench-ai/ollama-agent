@@ -2,6 +2,8 @@ import { createInterface } from "node:readline/promises";
 import process from "node:process";
 import path from "node:path";
 import { Agent } from "./core/agent.ts";
+import { MAX_IMAGE_BYTES, loadImageAttachment } from "./core/images.ts";
+import type { ImageAttachment } from "./core/types.ts";
 import { OllamaProvider } from "./core/ollama.ts";
 import {
   PERMISSION_MODES,
@@ -139,6 +141,7 @@ Options
 
 Slash commands
   /help  /models  /model <name>  /mode <mode>  /think [on|off]
+  /image <path>  /images   (attach images to the next message)
   /mcp [reconnect <server>]  /resources  /resource <server> <uri>
   /prompts  /prompt <server> <name> [key=value ...]
   /clear  /session  /exit
@@ -360,11 +363,16 @@ async function main(): Promise<void> {
     }
   });
 
-  const runTurn = async (text: string): Promise<void> => {
+  let stagedImages: ImageAttachment[] = [];
+
+  const runTurn = async (
+    text: string,
+    images?: ImageAttachment[],
+  ): Promise<void> => {
     currentController = new AbortController();
     agent.signal = currentController.signal;
     try {
-      await agent.run(text);
+      await agent.run(text, images);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       if (!/abort/i.test(message)) console.error(style.red(message));
@@ -552,8 +560,52 @@ async function main(): Promise<void> {
           }
           break;
         }
+        case "image": {
+          const target = rest.join(" ").trim();
+          if (!target) {
+            console.log(style.dim("usage: /image <path> | /image clear"));
+            break;
+          }
+          if (target === "clear") {
+            stagedImages = [];
+            console.log(style.dim("staged images cleared"));
+            break;
+          }
+          try {
+            if (stagedImages.length >= 8) {
+              console.log(style.red("at most 8 images per message"));
+              break;
+            }
+            const attachment = await loadImageAttachment(
+              path.resolve(cwd, target),
+              { maxBytes: MAX_IMAGE_BYTES },
+            );
+            stagedImages.push(attachment);
+            const kb = Math.round(((attachment.data.length * 3) / 4) / 1024);
+            console.log(
+              style.dim(
+                `image attached: ${attachment.name} (${attachment.mimeType}, ~${kb} KB) · ` +
+                  `${stagedImages.length} staged`,
+              ),
+            );
+          } catch (error) {
+            console.log(style.red(error instanceof Error ? error.message : String(error)));
+          }
+          break;
+        }
+        case "images": {
+          if (stagedImages.length === 0) {
+            console.log(style.dim("no staged images"));
+            break;
+          }
+          for (const image of stagedImages) {
+            console.log(style.dim(`${image.name ?? "image"}  ${image.mimeType}`));
+          }
+          break;
+        }
         case "clear":
           agent.reset();
+          stagedImages = [];
           console.log(style.dim("conversation cleared"));
           break;
         case "session":
@@ -569,7 +621,9 @@ async function main(): Promise<void> {
       continue;
     }
 
-    await runTurn(input);
+    const turnImages = stagedImages;
+    stagedImages = [];
+    await runTurn(input, turnImages.length > 0 ? turnImages : undefined);
   }
   } finally {
     rl.close();

@@ -8,7 +8,11 @@
   const modelSelect = document.getElementById("model");
   const modeSelect = document.getElementById("mode");
   const mcpLabel = document.getElementById("mcp");
+  const attachButton = document.getElementById("attach");
+  const fileInput = document.getElementById("file");
+  const previews = document.getElementById("previews");
   let running = false;
+  let stagedImages = [];
 
   if (!bridge) {
     log.appendChild(el("div", "notice error", "No agent bridge available. Start the Electron app or src/server.ts."));
@@ -31,9 +35,22 @@
     }
   }
 
-  function addUser(text) {
+  function addUser(text, images) {
     const wrap = el("div", "msg user");
-    wrap.appendChild(el("div", "bubble", text));
+    const bubble = el("div", "bubble");
+    if (images && images.length > 0) {
+      const thumbs = el("div", "thumbs");
+      for (const image of images) {
+        const img = document.createElement("img");
+        img.src = image.dataUrl;
+        img.alt = image.name || "image";
+        thumbs.appendChild(img);
+      }
+      bubble.appendChild(thumbs);
+    }
+    if (text) bubble.appendChild(document.createTextNode(text));
+    else if (images && images.length > 0) bubble.appendChild(document.createTextNode("(image)"));
+    wrap.appendChild(bubble);
     log.appendChild(wrap);
     scrollIfNearBottom();
   }
@@ -193,14 +210,18 @@
     scrollIfNearBottom();
   }
 
-  async function runTurn(text) {
+  async function runTurn(text, images = []) {
     if (running) return;
     running = true;
     send.disabled = true;
-    addUser(text);
+    addUser(text, images);
     const target = { bubble: addAssistant(), thinking: null, currentTool: null };
     try {
-      await bridge.chat(text, (event, data) => handleEvent(event, data, target));
+      await bridge.chat(
+        text,
+        images.map(({ data, mimeType, name }) => ({ data, mimeType, name })),
+        (event, data) => handleEvent(event, data, target),
+      );
     } catch (error) {
       addError(error instanceof Error ? error.message : String(error));
     } finally {
@@ -210,12 +231,92 @@
     }
   }
 
+  const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
+
+  function readFileAsAttachment(file) {
+    return new Promise((resolve, reject) => {
+      if (!file.type.startsWith("image/")) {
+        reject(new Error("Only images are supported."));
+        return;
+      }
+      if (file.size > MAX_IMAGE_BYTES) {
+        reject(new Error(file.name + " is larger than 10 MB."));
+        return;
+      }
+      const reader = new FileReader();
+      reader.onerror = () => reject(new Error("Could not read " + file.name));
+      reader.onload = () => {
+        const dataUrl = String(reader.result);
+        const match = /^data:([^;]+);base64,(.*)$/s.exec(dataUrl);
+        if (!match) {
+          reject(new Error("Unsupported image encoding."));
+          return;
+        }
+        resolve({ data: match[2], mimeType: match[1], name: file.name, dataUrl });
+      };
+      reader.readAsDataURL(file);
+    });
+  }
+
+  function renderPreviews() {
+    previews.innerHTML = "";
+    stagedImages.forEach((image, index) => {
+      const chip = el("div", "chip");
+      const img = document.createElement("img");
+      img.src = image.dataUrl;
+      img.alt = image.name || "image";
+      const remove = el("button", "", "×");
+      remove.type = "button";
+      remove.title = "Remove";
+      remove.addEventListener("click", () => {
+        stagedImages.splice(index, 1);
+        renderPreviews();
+      });
+      chip.append(img, remove);
+      previews.appendChild(chip);
+    });
+  }
+
+  async function addFiles(files) {
+    for (const file of files) {
+      if (stagedImages.length >= 8) {
+        addError("At most 8 images per message.");
+        break;
+      }
+      try {
+        stagedImages.push(await readFileAsAttachment(file));
+      } catch (error) {
+        addError(error instanceof Error ? error.message : String(error));
+      }
+    }
+    renderPreviews();
+  }
+
+  attachButton.addEventListener("click", () => fileInput.click());
+  fileInput.addEventListener("change", () => {
+    const files = Array.from(fileInput.files ?? []);
+    fileInput.value = "";
+    if (files.length > 0) void addFiles(files);
+  });
+  input.addEventListener("paste", (event) => {
+    const files = Array.from(event.clipboardData?.files ?? []).filter((file) =>
+      file.type.startsWith("image/"),
+    );
+    if (files.length > 0) {
+      event.preventDefault();
+      void addFiles(files);
+    }
+  });
+
   document.getElementById("composer").addEventListener("submit", (event) => {
     event.preventDefault();
     const text = input.value.trim();
     if (!text) return;
+    const images = stagedImages;
+    stagedImages = [];
+    renderPreviews();
     input.value = "";
-    runTurn(text);
+    runTurn(text, images);
   });
 
   input.addEventListener("keydown", (event) => {

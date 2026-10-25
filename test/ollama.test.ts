@@ -9,6 +9,50 @@ test("normalizeHost adds a scheme and strips trailing slashes", () => {
   assert.equal(normalizeHost(""), "http://127.0.0.1:11434");
 });
 
+test("images attach to user messages and follow tool results", () => {
+  const messages: Message[] = [
+    {
+      role: "user",
+      content: [
+        { type: "text", text: "what is this?" },
+        { type: "image", data: "AAAA", mimeType: "image/png", name: "shot.png" },
+      ],
+    },
+    {
+      role: "assistant",
+      content: [{ type: "tool_use", id: "c1", name: "Read", input: {} }],
+    },
+    {
+      role: "user",
+      content: [
+        {
+          type: "tool_result",
+          tool_use_id: "c1",
+          name: "Read",
+          content: "[image]",
+          images: [{ data: "BBBB", mimeType: "image/png", name: "chart.png" }],
+        },
+      ],
+    },
+  ];
+
+  const mapped = toOllamaMessages(messages, "system");
+  const user = mapped.find((entry) => entry.role === "user" && entry.content === "what is this?");
+  assert.deepEqual(user?.images, ["AAAA"]);
+
+  const tool = mapped.find((entry) => entry.role === "tool");
+  assert.equal(tool?.content, "[image]");
+
+  const follow = mapped.find(
+    (entry) =>
+      entry.role === "user" &&
+      typeof entry.content === "string" &&
+      entry.content.includes("Images returned by tool results"),
+  );
+  assert.deepEqual(follow?.images, ["BBBB"]);
+  assert.match(String(follow?.content), /chart\.png/);
+});
+
 test("conversation maps to Ollama chat messages", () => {
   const messages: Message[] = [
     { role: "user", content: [{ type: "text", text: "list files" }] },

@@ -29,11 +29,11 @@
 
     approve: (id, decision) => post("/api/approve", { id, decision }),
 
-    async chat(message, onEvent) {
+    async chat(message, images, onEvent) {
       const response = await fetch("/api/chat", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ message }),
+        body: JSON.stringify({ message, images: images ?? [] }),
       });
       if (!response.ok) {
         const data = await response.json().catch(() => ({}));

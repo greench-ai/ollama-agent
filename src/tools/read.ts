@@ -2,6 +2,11 @@ import { readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import type { Tool, ToolResult } from "../core/types.ts";
 import {
+  MAX_IMAGE_BYTES,
+  imageMimeTypeForPath,
+  loadImageAttachment,
+} from "../core/images.ts";
+import {
   ToolInputError,
   optionalNumber,
   requireAbsolutePath,
@@ -10,7 +15,6 @@ import {
 
 const DEFAULT_LINES = 2000;
 const MAX_LINE_LENGTH = 2000;
-const IMAGE_EXTENSIONS = new Set([".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"]);
 
 export const readTool: Tool = {
   name: "Read",
@@ -58,13 +62,17 @@ export const readTool: Tool = {
       );
     }
 
-    const extension = path.extname(filePath).toLowerCase();
-    if (IMAGE_EXTENSIONS.has(extension)) {
+    const mimeType = imageMimeTypeForPath(filePath);
+    if (mimeType) {
+      const attachment = await loadImageAttachment(filePath, {
+        maxBytes: MAX_IMAGE_BYTES,
+      });
       return {
-        content: `[image "${path.basename(filePath)}", ${info.size} bytes — this client does not render images]`,
+        content: `[image "${attachment.name}", ${info.size} bytes, ${mimeType}]`,
+        images: [attachment],
       };
     }
-    if (extension === ".pdf") {
+    if (path.extname(filePath).toLowerCase() === ".pdf") {
       return {
         content: `[PDF "${path.basename(filePath)}", ${info.size} bytes — PDF page extraction is not implemented]`,
       };
