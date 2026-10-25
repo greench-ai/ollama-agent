@@ -1,0 +1,65 @@
+{
+  "name": "ollama-agent",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "dist-electron/main.cjs",
+  "description": "Agentic coding CLI and shared core for Ollama local and cloud models",
+  "homepage": "https://github.com/greench-ai/ollama-agent",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/greench-ai/ollama-agent.git"
+  },
+  "license": "MIT",
+  "author": {
+    "name": "greench-ai",
+    "email": "greench-ai@users.noreply.github.com"
+  },
+  "desktopName": "ollama-agent.desktop",
+  "engines": {
+    "node": ">=22.18"
+  },
+  "scripts": {
+    "dev": "node --watch src/index.ts",
+    "start": "node src/index.ts",
+    "server": "node src/server.ts",
+    "electron:build": "node scripts/build-electron.mjs",
+    "electron:start": "npm run electron:build && electron .",
+    "electron:smoke": "npm run electron:build && AGENT_SMOKE=1 electron . --no-sandbox",
+    "package:linux": "npm run electron:build && electron-builder --linux AppImage deb --x64",
+    "test": "node --test test/*.test.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "build": {
+    "appId": "dev.local.ollamaagent",
+    "productName": "ollama-agent",
+    "asar": true,
+    "directories": {
+      "output": "release",
+      "buildResources": "build"
+    },
+    "files": [
+      "dist-electron/**/*",
+      "web/**/*",
+      "package.json"
+    ],
+    "linux": {
+      "target": [
+        "AppImage",
+        "deb"
+      ],
+      "category": "Development",
+      "icon": "build/icon.png",
+      "maintainer": "greench-ai <greench-ai@users.noreply.github.com>",
+      "syncDesktopName": true,
+      "artifactName": "${productName}-${version}-${arch}.${ext}"
+    }
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "electron": "^45.0.0",
+    "electron-builder": "^26.18.0",
+    "esbuild": "^0.28.2",
+    "typescript": "^5.6.0"
+  }
+}
