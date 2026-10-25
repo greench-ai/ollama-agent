@@ -51,22 +51,38 @@ function parseOAuth(
     throw new Error(`${source}: server "${name}" auth must be an object.`);
   }
   const record = value as Record<string, unknown>;
-  if (
-    typeof record.authorizationUrl !== "string" ||
-    typeof record.tokenUrl !== "string" ||
-    typeof record.clientId !== "string"
-  ) {
+  const authorizationUrl =
+    typeof record.authorizationUrl === "string"
+      ? expandEnv(record.authorizationUrl)
+      : undefined;
+  const tokenUrl =
+    typeof record.tokenUrl === "string" ? expandEnv(record.tokenUrl) : undefined;
+  const clientId =
+    typeof record.clientId === "string" ? expandEnv(record.clientId) : undefined;
+
+  const hasAny = Boolean(authorizationUrl || tokenUrl || clientId);
+  if (hasAny && !(authorizationUrl && tokenUrl && clientId)) {
     throw new Error(
-      `${source}: server "${name}" auth needs authorizationUrl, tokenUrl, and clientId.`,
+      `${source}: server "${name}" auth needs authorizationUrl, tokenUrl, and clientId together, or none of them for discovery.`,
     );
   }
+
   return {
-    authorizationUrl: expandEnv(record.authorizationUrl),
-    tokenUrl: expandEnv(record.tokenUrl),
-    clientId: expandEnv(record.clientId),
+    type: "oauth",
+    authorizationUrl,
+    tokenUrl,
+    clientId,
     clientSecret:
       typeof record.clientSecret === "string"
         ? expandEnv(record.clientSecret)
+        : undefined,
+    registrationUrl:
+      typeof record.registrationUrl === "string"
+        ? expandEnv(record.registrationUrl)
+        : undefined,
+    resourceMetadataUrl:
+      typeof record.resourceMetadataUrl === "string"
+        ? expandEnv(record.resourceMetadataUrl)
         : undefined,
     scopes: Array.isArray(record.scopes)
       ? record.scopes
@@ -80,6 +96,10 @@ function parseOAuth(
         : undefined,
     audience:
       typeof record.audience === "string" ? expandEnv(record.audience) : undefined,
+    clientName:
+      typeof record.clientName === "string"
+        ? expandEnv(record.clientName)
+        : undefined,
     extraAuthorizationParams: stringRecord(record.extraAuthorizationParams),
   };
 }

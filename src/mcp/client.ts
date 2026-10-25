@@ -1,6 +1,10 @@
 import { JsonRpcConnection, JsonRpcError } from "./jsonrpc.ts";
-import { HttpTransport, StdioTransport } from "./transports.ts";
-import { ensureToken } from "./oauth.ts";
+import { HttpTransport, StdioTransport, HttpTransportError } from "./transports.ts";
+import {
+  ensureToken,
+  parseResourceMetadata,
+  peekToken,
+} from "./oauth.ts";
 import type { McpServerConfig } from "./config.ts";
 import type { JsonSchema } from "../core/types.ts";
 
@@ -107,8 +111,14 @@ export class McpClient {
     options: McpClientOptions = {},
   ): Promise<McpClient> {
     let token: string | undefined;
-    if ("url" in config && config.auth) {
-      token = await ensureToken(name, config.auth, { openUrl: options.openUrl });
+    if ("url" in config) {
+      token = await peekToken(name);
+      if (!token && config.auth) {
+        token = await ensureToken(name, config.auth, {
+          serverUrl: config.url,
+          openUrl: options.openUrl,
+        });
+      }
     }
 
     let attempts = 0;
@@ -116,21 +126,27 @@ export class McpClient {
       try {
         return await McpClient.connectOnce(name, config, options, token);
       } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        const unauthorized = /401|unauthorized/i.test(message);
-        if (
-          !("url" in config) ||
-          !config.auth ||
-          !unauthorized ||
-          attempts >= 1
-        ) {
-          throw error;
-        }
-        // The cached token was rejected: refresh, then authorize if needed.
+        if (!("url" in config)) throw error;
+
+        const unauthorized =
+          error instanceof HttpTransportError && error.status === 401;
+        const challenge =
+          error instanceof HttpTransportError
+            ? (error.headers.get("www-authenticate") ?? undefined)
+            : undefined;
+        const resourceMetadata = parseResourceMetadata(challenge);
+
+        // Auto-discovery only when the server clearly advertises OAuth
+        // (RFC 9728 resource metadata) or OAuth was configured explicitly.
+        const canAuthenticate = config.auth !== undefined || resourceMetadata !== undefined;
+        if (!unauthorized || !canAuthenticate || attempts >= 1) throw error;
+
         attempts += 1;
-        token = await ensureToken(name, config.auth, {
+        token = await ensureToken(name, config.auth ?? {}, {
+          serverUrl: config.url,
           force: true,
           openUrl: options.openUrl,
+          wwwAuthenticate: challenge,
         });
       }
     }

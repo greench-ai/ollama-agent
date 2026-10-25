@@ -34,6 +34,10 @@ test("config parsing validates entries and expands environment variables", () =>
           url: "https://example.test/mcp",
           headers: { authorization: "Bearer ${MCP_TEST_TOKEN}" },
         },
+        discovered: {
+          url: "https://discovered.test/mcp",
+          auth: { type: "oauth", scopes: ["mcp.read"] },
+        },
       },
     },
     "test",
@@ -47,6 +51,12 @@ test("config parsing validates entries and expands environment variables", () =>
   const remote = servers.remote;
   assert.ok("url" in remote);
   assert.equal(remote.headers?.authorization, "Bearer s3cret");
+
+  const discovered = servers.discovered;
+  assert.ok("url" in discovered);
+  assert.equal(discovered.auth?.type, "oauth");
+  assert.deepEqual(discovered.auth?.scopes, ["mcp.read"]);
+  assert.equal(discovered.auth?.clientId, undefined);
 
   assert.throws(
     () => parseMcpConfig({ mcpServers: { broken: {} } }, "test"),

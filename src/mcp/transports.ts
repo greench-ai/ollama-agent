@@ -1,6 +1,19 @@
 import { spawn } from "node:child_process";
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 
+/** Error carrying the HTTP status and headers for OAuth discovery. */
+export class HttpTransportError extends Error {
+  status: number;
+  headers: Headers;
+
+  constructor(status: number, statusText: string, body: string, headers: Headers) {
+    super(`MCP HTTP ${status} ${statusText}: ${body}`);
+    this.name = "HttpTransportError";
+    this.status = status;
+    this.headers = headers;
+  }
+}
+
 export interface TransportOptions {
   onMessage: (message: unknown) => void;
   onError: (error: Error) => void;
@@ -147,7 +160,12 @@ export class HttpTransport {
     }
     if (!response.ok) {
       const body = (await response.text()).slice(0, 500);
-      throw new Error(`MCP HTTP ${response.status} ${response.statusText}: ${body}`);
+      throw new HttpTransportError(
+        response.status,
+        response.statusText,
+        body,
+        response.headers,
+      );
     }
 
     const contentType = (response.headers.get("content-type") ?? "").toLowerCase();

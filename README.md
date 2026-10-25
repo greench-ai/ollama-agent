@@ -133,10 +133,19 @@ and `--no-mcp` to disable MCP entirely.
     "remote": {
       "type": "http",
       "url": "https://example.com/mcp",
-      "headers": { "authorization": "Bearer ${MCP_TOKEN}" },
+      "headers": { "authorization": "Bearer ${MCP_TOKEN}" }
+    },
+    "discovered": {
+      "type": "http",
+      "url": "https://mcp.example.org/mcp",
+      "auth": { "type": "oauth", "scopes": ["mcp.read"] }
+    },
+    "explicit": {
+      "type": "http",
+      "url": "https://example.net/mcp",
       "auth": {
-        "authorizationUrl": "https://auth.example.com/authorize",
-        "tokenUrl": "https://auth.example.com/token",
+        "authorizationUrl": "https://auth.example.net/authorize",
+        "tokenUrl": "https://auth.example.net/token",
         "clientId": "${MCP_CLIENT_ID}",
         "clientSecret": "${MCP_CLIENT_SECRET}",
         "scopes": ["mcp.read"],
@@ -160,8 +169,14 @@ and `--no-mcp` to disable MCP entirely.
   (default 4318). Tokens are stored per server in
   `~/.local/share/ollama-agent/mcp-auth.json` (mode 0600), refreshed on expiry,
   and re-obtained once if the server answers 401. `auth` wins over a static
-  `authorization` header. Dynamic client registration and discovery are not
-  implemented — configure the endpoints and `clientId` yourself.
+  `authorization` header.
+- **Discovery and dynamic registration**: with `auth` omitted (or
+  `"auth": {"type": "oauth"}`), a 401 whose `WWW-Authenticate` header carries
+  `resource_metadata` triggers RFC 9728 protected-resource discovery, RFC 8414
+  authorization-server metadata, and RFC 7591 dynamic client registration. The
+  registered client is cached per server in `mcp-clients.json` (mode 0600) and
+  reused. `resourceMetadataUrl` and `registrationUrl` override discovery, and
+  explicit `authorizationUrl`/`tokenUrl`/`clientId` skip it entirely.
 
 ## Web UI
 
@@ -308,9 +323,9 @@ Early. Implemented: streaming, tool loop, permissions, sessions, 8 built-in
 tools (including `Task` subagents with isolated context), image input (user
 attachments, Read on images, MCP image results), an MCP client (stdio +
 Streamable HTTP; tools, resources, prompts, pagination, annotations, reconnect,
-OAuth authorization-code + PKCE), a local HTTP/SSE server with a web client, an
-Electron shell with a sandboxed renderer, IPC approvals, plan-mode
-propose/approve/apply, CSP, window-state persistence, menus, Linux packaging
-(AppImage + deb), cross-platform CI packaging (Windows NSIS/zip, macOS dmg/zip
-x64 + arm64), and electron-updater wiring. Not yet: code signing/notarization
-and MCP dynamic client registration/discovery.
+OAuth authorization-code + PKCE with discovery and dynamic client registration),
+a local HTTP/SSE server with a web client, an Electron shell with a sandboxed
+renderer, IPC approvals, plan-mode propose/approve/apply, CSP, window-state
+persistence, menus, Linux packaging (AppImage + deb), cross-platform CI
+packaging (Windows NSIS/zip, macOS dmg/zip x64 + arm64), and electron-updater
+wiring. Not yet: code signing/notarization.

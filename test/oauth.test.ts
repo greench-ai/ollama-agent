@@ -21,6 +21,8 @@ interface FixtureOptions {
   expiresIn: number;
   /** Which bearer tokens the MCP endpoint accepts */
   acceptToken: (token: string) => boolean;
+  /** Advertise RFC 9728 metadata and a registration endpoint */
+  discovery?: boolean;
 }
 
 async function startOAuthFixture(options: FixtureOptions) {
@@ -28,10 +30,53 @@ async function startOAuthFixture(options: FixtureOptions) {
   let authorizationCalls = 0;
   const tokenCalls: Array<Record<string, string>> = [];
   const authHeaders: string[] = [];
+  const registrationPayloads: Array<Record<string, unknown>> = [];
 
   const server = createServer(
     async (request: IncomingMessage, response: ServerResponse) => {
       const url = new URL(request.url ?? "/", "http://127.0.0.1");
+      const origin = `http://${request.headers.host ?? "127.0.0.1"}`;
+
+      if (url.pathname === "/.well-known/oauth-protected-resource") {
+        response.writeHead(200, { "content-type": "application/json" });
+        response.end(
+          JSON.stringify({
+            resource: `${origin}/mcp`,
+            authorization_servers: [origin],
+            scopes_supported: ["mcp.read"],
+          }),
+        );
+        return;
+      }
+
+      if (url.pathname === "/.well-known/oauth-authorization-server") {
+        response.writeHead(200, { "content-type": "application/json" });
+        response.end(
+          JSON.stringify({
+            issuer: origin,
+            authorization_endpoint: `${origin}/authorize`,
+            token_endpoint: `${origin}/token`,
+            registration_endpoint: `${origin}/register`,
+            scopes_supported: ["mcp.read"],
+          }),
+        );
+        return;
+      }
+
+      if (url.pathname === "/register") {
+        const payload = JSON.parse((await readBody(request)) || "{}");
+        registrationPayloads.push(payload);
+        response.writeHead(201, { "content-type": "application/json" });
+        response.end(
+          JSON.stringify({
+            client_id: "dyn-client",
+            client_secret: "dyn-secret",
+            token_endpoint_auth_method: "none",
+          }),
+        );
+        return;
+      }
+
       if (url.pathname === "/authorize") {
         authorizationCalls += 1;
         const redirect = url.searchParams.get("redirect_uri") ?? "";
@@ -84,9 +129,12 @@ async function startOAuthFixture(options: FixtureOptions) {
         authHeaders.push(authorization);
         const token = authorization.replace(/^Bearer\s+/i, "");
         if (!options.acceptToken(token)) {
-          response
-            .writeHead(401, { "www-authenticate": 'Bearer realm="test"' })
-            .end();
+          const headers: Record<string, string> = {};
+          if (options.discovery) {
+            headers["www-authenticate"] =
+              `Bearer resource_metadata="${origin}/.well-known/oauth-protected-resource"`;
+          }
+          response.writeHead(401, headers).end();
           return;
         }
         const message = JSON.parse((await readBody(request)) || "{}") as {
@@ -128,7 +176,14 @@ async function startOAuthFixture(options: FixtureOptions) {
   const port = (server.address() as AddressInfo).port;
   return {
     url: `http://127.0.0.1:${port}`,
-    stats: () => ({ issued, authorizationCalls, tokenCalls, authHeaders }),
+    stats: () => ({
+      issued,
+      authorizationCalls,
+      tokenCalls,
+      authHeaders,
+      registrations: registrationPayloads.length,
+      registrationPayloads,
+    }),
     close: async () => {
       server.closeAllConnections();
       await new Promise<void>((resolve) => server.close(() => resolve()));
@@ -166,6 +221,7 @@ test("ensureToken authorizes, persists 0600, and refreshes when expired", async 
   });
   try {
     const first = await ensureToken("srv", configFor(fixture.url).auth!, {
+      serverUrl: fixture.url,
       openUrl: fakeBrowser,
     });
     assert.equal(first, "token-1");
@@ -176,6 +232,7 @@ test("ensureToken authorizes, persists 0600, and refreshes when expired", async 
     }
 
     const second = await ensureToken("srv", configFor(fixture.url).auth!, {
+      serverUrl: fixture.url,
       openUrl: fakeBrowser,
     });
     assert.equal(second, "token-2", "expired token is refreshed");
@@ -186,6 +243,50 @@ test("ensureToken authorizes, persists 0600, and refreshes when expired", async 
       stats.tokenCalls.map((call) => call.grant_type),
       ["authorization_code", "refresh_token"],
     );
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("discovers metadata, registers a client dynamically, and caches both", async () => {
+  process.env.OLLAMA_AGENT_HOME = await mkdtemp(path.join(tmpdir(), "agent-oauth-home-"));
+  const fixture = await startOAuthFixture({
+    expiresIn: 3600,
+    acceptToken: (token) => token === "token-1",
+    discovery: true,
+  });
+  try {
+    // No auth config at all: the 401's resource_metadata drives discovery.
+    const client = await McpClient.connect(
+      "srv",
+      { url: `${fixture.url}/mcp` },
+      { openUrl: fakeBrowser },
+    );
+    try {
+      const tools = await client.listTools();
+      assert.equal(tools[0].name, "ping");
+    } finally {
+      await client.close();
+    }
+
+    let stats = fixture.stats();
+    assert.equal(stats.registrations, 1, "registered once");
+    assert.equal(stats.authorizationCalls, 1);
+    assert.equal(stats.tokenCalls[0].grant_type, "authorization_code");
+    assert.equal(stats.tokenCalls[0].client_id, "dyn-client");
+    assert.equal(stats.registrationPayloads[0].client_name, "ollama-agent");
+    assert.deepEqual(stats.registrationPayloads[0].redirect_uris, [
+      "http://127.0.0.1:4318/callback",
+    ]);
+    assert.equal(stats.registrationPayloads[0].scope, "mcp.read");
+
+    // A second connection reuses the cached token and registration.
+    const again = await McpClient.connect("srv", { url: `${fixture.url}/mcp` });
+    await again.close();
+
+    stats = fixture.stats();
+    assert.equal(stats.registrations, 1);
+    assert.equal(stats.authorizationCalls, 1);
   } finally {
     await fixture.close();
   }
