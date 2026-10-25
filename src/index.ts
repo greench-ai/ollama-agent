@@ -123,7 +123,7 @@ export function parseArgs(argv: string[]): CliOptions {
 const HELP = `ollama-agent — an agentic coding CLI for Ollama local and cloud models
 
 Usage
-  node src/index.ts [options]
+  ollama-agent [options]
 
 Options
   -m, --model <name>     Model name (default: $OLLAMA_MODEL or first model)

@@ -30,6 +30,13 @@ node src/index.ts --mcp-config ./mcp.json
 
 Environment variables: `OLLAMA_HOST`, `OLLAMA_API_KEY`, `OLLAMA_MODEL`.
 
+Standalone CLI bundle (single file, no TypeScript loader needed):
+
+```bash
+npm run build:cli        # → dist/cli.mjs
+node dist/cli.mjs --model qwen3:8b
+```
+
 ## Slash commands
 
 ```

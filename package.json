@@ -22,6 +22,7 @@
   "scripts": {
     "dev": "node --watch src/index.ts",
     "start": "node src/index.ts",
+    "build:cli": "esbuild src/index.ts --bundle --platform=node --format=esm --target=node20 --outfile=dist/cli.mjs",
     "server": "node src/server.ts",
     "electron:build": "node scripts/build-electron.mjs",
     "electron:start": "npm run electron:build && electron .",
