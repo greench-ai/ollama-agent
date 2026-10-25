@@ -171,6 +171,11 @@
         break;
       case "step":
         break;
+      case "update":
+        addNotice(
+          "update " + data.status + (data.version ? " · " + data.version : ""),
+        );
+        break;
       case "done":
         if (data && data.used !== undefined) {
           addNotice("context ~" + data.used + " / " + data.budget + " tokens");

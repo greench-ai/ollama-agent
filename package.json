@@ -27,6 +27,7 @@
     "electron:start": "npm run electron:build && electron .",
     "electron:smoke": "npm run electron:build && AGENT_SMOKE=1 electron . --no-sandbox",
     "package:linux": "npm run electron:build && electron-builder --linux AppImage deb --x64",
+    "release:linux": "npm run electron:build && electron-builder --linux AppImage deb --x64 --publish always",
     "test": "node --test test/*.test.ts",
     "typecheck": "tsc --noEmit"
   },
@@ -42,6 +43,13 @@
       "dist-electron/**/*",
       "web/**/*",
       "package.json"
+    ],
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "greench-ai",
+        "repo": "ollama-agent"
+      }
     ],
     "linux": {
       "target": [
@@ -59,6 +67,7 @@
     "@types/node": "^22.0.0",
     "electron": "^45.0.0",
     "electron-builder": "^26.18.0",
+    "electron-updater": "^6.8.11",
     "esbuild": "^0.28.2",
     "typescript": "^5.6.0"
   }

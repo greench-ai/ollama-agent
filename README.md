@@ -141,9 +141,6 @@ AGENT_SMOKE_CHAT=1 electron . --no-sandbox       # runs one real turn over IPC
 On Wayland, Electron may print an ozone/Vulkan warning; it is harmless. Use
 `--ozone-platform=x11` if rendering misbehaves.
 
-Packaging (installer, signing, auto-update) is not wired yet — `electron-builder`
-is the natural next step.
-
 ### Packaging (Linux)
 
 ```bash
@@ -159,6 +156,26 @@ The asar contains only `dist-electron/`, `web/`, and `package.json`; the core is
 bundled, so no `node_modules` ships. The homepage/author/maintainer fields use
 `.invalid` placeholders — replace them before distributing. Windows/macOS targets
 need their own config and signing identities.
+
+### Auto-update
+
+`electron-updater` is wired for packaged builds. electron-builder writes
+`app-update.yml` (GitHub provider, `greench-ai/ollama-agent`) and
+`latest-linux.yml`. The app checks on launch and forwards
+`update: available/downloaded` events to the renderer.
+
+The v0.1.0 release predates this metadata, so its updater check reports a 404
+for `latest-linux.yml`. The next release fixes that.
+
+```bash
+npm version patch
+npm run electron:build
+GH_TOKEN=$(gh auth token) npx electron-builder --linux AppImage deb --x64 --publish always
+```
+
+`--publish always` uploads the artifacts, blockmaps, and `latest-linux.yml`.
+electron-builder creates a draft release by default; publish it in the GitHub UI.
+`npm run release:linux` is the same command without the token.
 
 ### Security posture
 
@@ -185,7 +202,7 @@ need their own config and signing identities.
 Early. Implemented: streaming, tool loop, permissions, sessions, 7 built-in
 tools, an MCP client (stdio + Streamable HTTP; tools, resources, prompts,
 pagination, annotations, reconnect), a local HTTP/SSE server with a web client,
-and an Electron shell with a sandboxed renderer, IPC approvals, CSP, window-state
-persistence, menus, and Linux packaging (AppImage + deb). Not yet: auto-update,
-subagents, image input, OAuth for HTTP MCP servers, and a plan-mode editing
-workflow.
+an Electron shell with a sandboxed renderer, IPC approvals, CSP, window-state
+persistence, menus, Linux packaging (AppImage + deb), and electron-updater
+wiring. Not yet: subagents, image input, OAuth for HTTP MCP servers, and a
+plan-mode editing workflow.
