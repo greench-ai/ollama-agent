@@ -21,13 +21,30 @@ const bridge = {
   approvePlan: (id: string, approved: boolean, feedback?: string) =>
     ipcRenderer.invoke("agent:approve-plan", { id, approved, feedback }),
 
+  cancel: () => ipcRenderer.invoke("agent:cancel"),
+
+  listSessions: () => ipcRenderer.invoke("sessions:list"),
+
+  newSession: () => ipcRenderer.invoke("sessions:new"),
+
+  loadSession: (id: string) => ipcRenderer.invoke("sessions:load", { id }),
+
+  renameSession: (id: string, title: string) =>
+    ipcRenderer.invoke("sessions:rename", { id, title }),
+
+  deleteSession: (id: string) => ipcRenderer.invoke("sessions:delete", { id }),
+
   chat: async (
     message: string,
     images: Array<{ data: string; mimeType: string; name?: string }>,
     onEvent: (event: string, data: unknown) => void,
   ): Promise<unknown> => {
     const listener = (_event: IpcRendererEvent, payload: EventPayload) => {
-      onEvent(payload.event, payload.data);
+      try {
+        onEvent(payload.event, payload.data);
+      } catch (error) {
+        console.error("[preload] agent event handler failed", error);
+      }
     };
     ipcRenderer.on("agent:event", listener);
     try {

@@ -60,6 +60,10 @@ export function summarizeToolInput(tool: string, input: Record<string, unknown>)
       return typeof input.pattern === "string" ? input.pattern : "(no pattern)";
     case "TodoWrite":
       return `${Array.isArray(input.todos) ? input.todos.length : 0} item(s)`;
+    case "Task":
+      return typeof input.description === "string" ? input.description : "";
+    case "ExitPlanMode":
+      return "proposed plan";
     default: {
       const first = Object.entries(input)[0];
       if (!first) return "";

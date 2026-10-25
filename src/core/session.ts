@@ -1,4 +1,4 @@
-import { appendFile, mkdir, readFile, readdir } from "node:fs/promises";
+import { appendFile, mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import { homedir } from "node:os";
 import path from "node:path";
@@ -13,6 +13,47 @@ export function agentHome(): string {
 
 export function sessionsDir(): string {
   return path.join(agentHome(), "sessions");
+}
+
+function titlesPath(): string {
+  return path.join(sessionsDir(), "index.json");
+}
+
+/** Session id -> display title. Kept outside the transcript so listing is cheap. */
+export async function readSessionTitles(): Promise<Record<string, string>> {
+  try {
+    const raw = JSON.parse(await readFile(titlesPath(), "utf8"));
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) return {};
+    const out: Record<string, string> = {};
+    for (const [id, title] of Object.entries(raw)) {
+      if (typeof title === "string") out[id] = title;
+    }
+    return out;
+  } catch {
+    return {};
+  }
+}
+
+async function writeSessionTitles(titles: Record<string, string>): Promise<void> {
+  await mkdir(sessionsDir(), { recursive: true });
+  await writeFile(titlesPath(), JSON.stringify(titles, null, 2), "utf8");
+}
+
+export async function getSessionTitle(id: string): Promise<string | undefined> {
+  return (await readSessionTitles())[id];
+}
+
+export async function setSessionTitle(id: string, title: string): Promise<void> {
+  const titles = await readSessionTitles();
+  titles[id] = title;
+  await writeSessionTitles(titles);
+}
+
+export async function deleteSessionTitle(id: string): Promise<void> {
+  const titles = await readSessionTitles();
+  if (!(id in titles)) return;
+  delete titles[id];
+  await writeSessionTitles(titles);
 }
 
 export type SessionRecord =
@@ -96,6 +137,10 @@ export class Session {
 
   async appendMessage(message: Message): Promise<void> {
     await this.append({ type: "message", message });
+  }
+
+  async setTitle(title: string): Promise<void> {
+    await setSessionTitle(this.id, title);
   }
 
   async appendTodos(todos: TodoItem[]): Promise<void> {

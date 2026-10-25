@@ -112,6 +112,10 @@ export class TerminalRenderer {
       case "usage":
         break;
 
+      case "session_title":
+        // The prompt itself was just echoed; no need to repeat the title.
+        break;
+
       case "turn_end":
         this.ensureNewline();
         break;

@@ -1,26 +1,69 @@
-// Renderer for both the Electron shell (IPC bridge) and the browser
-// (HTTP/SSE bridge). Keep DOM logic here; transport lives in the bridges.
+// Desktop/browser client. One UI over two transports:
+//   Electron: window.agentBridge from the preload script
+//   Browser:  window.agentBridge from browser-bridge.js (HTTP/SSE)
 (function () {
   const bridge = window.agentBridge;
-  const log = document.getElementById("log");
-  const input = document.getElementById("input");
-  const send = document.getElementById("send");
-  const modelSelect = document.getElementById("model");
-  const modeSelect = document.getElementById("mode");
-  const mcpLabel = document.getElementById("mcp");
-  const attachButton = document.getElementById("attach");
-  const fileInput = document.getElementById("file");
-  const previews = document.getElementById("previews");
-  let running = false;
-  let stagedImages = [];
+  const $ = (id) => document.getElementById(id);
+
+  const log = $("log");
+  const thread = $("thread");
+  const composer = $("composer");
+  const input = $("input");
+  const send = $("send");
+  const stop = $("stop");
+  const attach = $("attach");
+  const fileInput = $("file");
+  const previews = $("previews");
+  const modelSelect = $("model");
+  const modeSelect = $("mode");
+  const titleEl = $("chat-title");
+  const chatsEl = $("chats");
+  const searchEl = $("search");
+  const mcpEl = $("mcp");
+  const themeBtn = $("theme");
+  const collapseBtn = $("collapse");
+  const expandBtn = $("expand");
+  const newChatBtn = $("new-chat");
 
   if (!bridge) {
-    log.appendChild(el("div", "notice error", "No agent bridge available. Start the Electron app or src/server.ts."));
+    thread.appendChild(
+      Object.assign(document.createElement("div"), {
+        className: "notice error",
+        textContent:
+          "No agent bridge available. Start the Electron app or src/server.ts.",
+      }),
+    );
     return;
   }
 
-  // Used by the Electron smoke test to prove the page scripts executed.
   window.__agentAppLoaded = true;
+  window.__agentTurns = 0;
+  window.__agentEventLog = [];
+  window.__agentErrors = [];
+  const pushBounded = (list, value) => {
+    if (list.length < 500) list.push(value);
+  };
+  window.addEventListener("error", (event) => {
+    pushBounded(window.__agentErrors, String(event.message || event));
+  });
+  window.addEventListener("unhandledrejection", (event) => {
+    pushBounded(window.__agentErrors, String(event.reason));
+  });
+
+  const state = {
+    sessionId: null,
+    title: "New chat",
+    running: false,
+    sessions: [],
+    model: "",
+    mode: "default",
+    stagedImages: [],
+    theme: "system",
+  };
+
+  let current = null;
+
+  /* ---------- helpers ---------- */
 
   function el(tag, className, text) {
     const node = document.createElement(tag);
@@ -29,13 +72,135 @@
     return node;
   }
 
-  function scrollIfNearBottom() {
-    if (log.scrollHeight - log.scrollTop - log.clientHeight < 160) {
-      log.scrollTop = log.scrollHeight;
+  function nearBottom() {
+    return log.scrollHeight - log.scrollTop - log.clientHeight < 180;
+  }
+
+  function scrollIfNear() {
+    if (nearBottom()) log.scrollTop = log.scrollHeight;
+  }
+
+  function scrollToBottom() {
+    log.scrollTop = log.scrollHeight;
+  }
+
+  function setHasChat(has) {
+    document.body.classList.toggle("has-chat", has);
+  }
+
+  function md(text) {
+    return typeof window.renderMarkdown === "function"
+      ? window.renderMarkdown(text)
+      : String(text).replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
+  }
+
+  async function copyText(text) {
+    try {
+      await navigator.clipboard.writeText(text);
+      return true;
+    } catch {
+      try {
+        const area = document.createElement("textarea");
+        area.value = text;
+        area.style.position = "fixed";
+        area.style.opacity = "0";
+        document.body.appendChild(area);
+        area.select();
+        document.execCommand("copy");
+        area.remove();
+        return true;
+      } catch {
+        return false;
+      }
     }
   }
 
-  function addUser(text, images) {
+  function enhance(container) {
+    container.querySelectorAll("pre").forEach((pre) => {
+      if (pre.querySelector(".copy")) return;
+      const button = el("button", "copy", "Copy");
+      button.type = "button";
+      button.addEventListener("click", async () => {
+        const code = pre.querySelector("code");
+        const ok = await copyText(code ? code.textContent : pre.textContent);
+        button.textContent = ok ? "Copied" : "Failed";
+        setTimeout(() => {
+          button.textContent = "Copy";
+        }, 1200);
+      });
+      pre.appendChild(button);
+    });
+  }
+
+  function renderMarkdownInto(node, text) {
+    node.innerHTML = md(text);
+    enhance(node);
+  }
+
+  function summarize(name, input) {
+    if (!input || typeof input !== "object") return "";
+    switch (name) {
+      case "Bash":
+        return typeof input.command === "string" ? input.command : "";
+      case "Read":
+      case "Write":
+      case "Edit":
+      case "MultiEdit":
+        return typeof input.file_path === "string" ? input.file_path : "";
+      case "Glob":
+      case "Grep":
+        return typeof input.pattern === "string" ? input.pattern : "";
+      case "TodoWrite":
+        return `${Array.isArray(input.todos) ? input.todos.length : 0} item(s)`;
+      case "Task":
+        return typeof input.description === "string" ? input.description : "";
+      default: {
+        const entry = Object.entries(input)[0];
+        if (!entry) return "";
+        const value = typeof entry[1] === "string" ? entry[1] : JSON.stringify(entry[1]);
+        return `${entry[0]}=${String(value).slice(0, 110)}`;
+      }
+    }
+  }
+
+  /* ---------- theme + sidebar ---------- */
+
+  const THEMES = ["system", "light", "dark"];
+
+  function applyTheme(theme) {
+    state.theme = THEMES.includes(theme) ? theme : "system";
+    document.documentElement.dataset.theme = state.theme;
+    themeBtn.textContent = `Theme: ${state.theme}`;
+    try {
+      localStorage.setItem("ollama-agent-theme", state.theme);
+    } catch {
+      // private mode / blocked storage
+    }
+  }
+
+  applyTheme(localStorage.getItem("ollama-agent-theme") || "system");
+  themeBtn.addEventListener("click", () => {
+    const index = THEMES.indexOf(state.theme);
+    applyTheme(THEMES[(index + 1) % THEMES.length]);
+  });
+
+  function setCollapsed(collapsed) {
+    document.body.classList.toggle("sidebar-collapsed", collapsed);
+    expandBtn.hidden = !collapsed;
+    try {
+      localStorage.setItem("ollama-agent-sidebar", collapsed ? "collapsed" : "open");
+    } catch {
+      // ignore
+    }
+  }
+
+  setCollapsed(localStorage.getItem("ollama-agent-sidebar") === "collapsed");
+  collapseBtn.addEventListener("click", () => setCollapsed(true));
+  expandBtn.addEventListener("click", () => setCollapsed(false));
+
+  /* ---------- messages ---------- */
+
+  function addUserMessage(text, images, scroll = true) {
     const wrap = el("div", "msg user");
     const bubble = el("div", "bubble");
     if (images && images.length > 0) {
@@ -49,71 +214,70 @@
       bubble.appendChild(thumbs);
     }
     if (text) bubble.appendChild(document.createTextNode(text));
-    else if (images && images.length > 0) bubble.appendChild(document.createTextNode("(image)"));
+    else if (images && images.length > 0) {
+      bubble.appendChild(document.createTextNode("(image)"));
+    }
     wrap.appendChild(bubble);
-    log.appendChild(wrap);
-    scrollIfNearBottom();
+    thread.appendChild(wrap);
+    if (scroll) {
+      setHasChat(true);
+      scrollIfNear();
+    }
   }
 
-  function addAssistant() {
-    const wrap = el("div", "msg assistant");
-    const bubble = el("div", "bubble");
-    wrap.appendChild(bubble);
-    log.appendChild(wrap);
-    return bubble;
+  function addThinking(parent) {
+    const details = el("details", "thinking");
+    details.appendChild(el("summary", "", "Thinking"));
+    const pre = el("pre");
+    details.appendChild(pre);
+    parent.appendChild(details);
+    return pre;
   }
 
-  function addTool(name, summary) {
-    const details = el("details", "tool");
+  function addToolCard(parent, name, summary, output, isError, open) {
+    const details = el("details", `tool${isError ? " error" : ""}`);
+    if (open) details.open = true;
     const head = el("summary");
     head.appendChild(el("span", "name", name));
     if (summary) head.appendChild(el("span", "arg", summary));
     details.appendChild(head);
-    const pre = el("pre", "", "running…");
+    const pre = el("pre", "", output === undefined ? "" : output);
     details.appendChild(pre);
-    details.open = true;
-    log.appendChild(details);
-    scrollIfNearBottom();
+    parent.appendChild(details);
     return { details, pre };
   }
 
-  function addThinking() {
-    const details = el("details", "thinking");
-    details.appendChild(el("summary", "", "thinking"));
-    const pre = el("pre");
-    details.appendChild(pre);
-    log.appendChild(details);
-    return pre;
-  }
-
   function addNotice(text) {
-    log.appendChild(el("div", "notice", text));
-    scrollIfNearBottom();
+    thread.appendChild(el("div", "notice", text));
+    scrollIfNear();
   }
 
   function addError(text) {
-    log.appendChild(el("div", "notice error", text));
-    scrollIfNearBottom();
+    thread.appendChild(el("div", "notice error", text));
+    scrollIfNear();
   }
 
   function addApproval(event) {
     const card = el("div", "approval");
     const text = el("div", "text");
-    text.appendChild(el("strong", "", "Allow " + event.tool + "? "));
+    text.appendChild(el("strong", "", "Allow " + event.tool + "?"));
     if (event.summary) text.appendChild(el("span", "muted", event.summary));
     card.appendChild(text);
 
+    const actions = el("div", "actions");
     const buttons = [];
     const decide = async (decision) => {
       buttons.forEach((button) => (button.disabled = true));
       try {
         await bridge.approve(event.id, decision);
-        card.appendChild(el("span", "done", decision === "deny" ? "denied" : decision));
+        actions.remove();
+        card.appendChild(
+          el("span", "done", decision === "deny" ? "denied" : decision),
+        );
       } catch {
         card.appendChild(el("span", "done error", "failed"));
       }
     };
-
     for (const [label, decision, className] of [
       ["Allow", "allow", "allow"],
       ["Deny", "deny", "deny"],
@@ -123,10 +287,11 @@
       button.type = "button";
       button.addEventListener("click", () => decide(decision));
       buttons.push(button);
-      card.appendChild(button);
+      actions.appendChild(button);
     }
-    log.appendChild(card);
-    scrollIfNearBottom();
+    card.appendChild(actions);
+    thread.appendChild(card);
+    scrollIfNear();
   }
 
   function addPlanApproval(event) {
@@ -149,9 +314,9 @@
           approved,
           approved ? undefined : feedback.value.trim() || undefined,
         );
-        card.appendChild(el("span", "done", approved ? "approved" : "rejected"));
         actions.remove();
         feedback.disabled = true;
+        card.appendChild(el("span", "done", approved ? "approved" : "rejected"));
       } catch {
         card.appendChild(el("span", "done error", "failed"));
       }
@@ -166,72 +331,149 @@
     buttons.push(approve, reject);
     actions.append(approve, reject);
     card.appendChild(actions);
-
-    log.appendChild(card);
-    scrollIfNearBottom();
+    thread.appendChild(card);
+    scrollIfNear();
   }
 
-  async function loadState() {
-    const [state, models] = await Promise.all([bridge.getState(), bridge.getModels()]);
-    modelSelect.innerHTML = "";
-    for (const entry of models.models ?? []) {
-      const option = el("option", "", entry.name);
-      option.value = entry.name;
-      modelSelect.appendChild(option);
+  /* ---------- history ---------- */
+
+  function renderHistory(messages) {
+    thread.innerHTML = "";
+    const results = new Map();
+    for (const message of messages) {
+      for (const block of message.content || []) {
+        if (block.type === "tool_result") results.set(block.tool_use_id, block);
+      }
     }
-    if (state.model) modelSelect.value = state.model;
-    modeSelect.value = state.mode;
-    const servers = state.mcp ?? [];
-    mcpLabel.textContent = servers.length
-      ? "mcp " + servers.filter((server) => server.ok).length + "/" + servers.length
-      : "";
-  }
 
-  async function updateState(patch) {
-    try {
-      await bridge.setState(patch);
-    } catch (error) {
-      addError(error instanceof Error ? error.message : String(error));
+    for (const message of messages) {
+      const blocks = message.content || [];
+      if (message.role === "user") {
+        const toolResults = blocks.filter((block) => block.type === "tool_result");
+        if (toolResults.length > 0 && toolResults.length === blocks.length) continue;
+        const text = blocks
+          .filter((block) => block.type === "text")
+          .map((block) => block.text)
+          .join("\n");
+        const images = blocks
+          .filter((block) => block.type === "image")
+          .map((image) => ({
+            dataUrl: `data:${image.mimeType};base64,${image.data}`,
+            name: image.name,
+          }));
+        if (text || images.length > 0) addUserMessage(text, images, false);
+        continue;
+      }
+      if (message.role !== "assistant") continue;
+
+      const wrap = el("div", "msg assistant");
+      let buffer = "";
+      const flush = () => {
+        if (!buffer) return;
+        const block = el("div", "md");
+        renderMarkdownInto(block, buffer);
+        wrap.appendChild(block);
+        buffer = "";
+      };
+
+      for (const block of blocks) {
+        if (block.type === "thinking") {
+          flush();
+          addThinking(wrap).textContent = block.thinking;
+        } else if (block.type === "text") {
+          buffer += block.text;
+        } else if (block.type === "tool_use") {
+          flush();
+          const result = results.get(block.id);
+          addToolCard(
+            wrap,
+            block.name,
+            summarize(block.name, block.input),
+            result ? result.content : "(no result)",
+            Boolean(result && result.is_error),
+            false,
+          );
+        }
+      }
+      flush();
+      if (wrap.childElementCount > 0) thread.appendChild(wrap);
     }
+
+    setHasChat(thread.childElementCount > 0);
+    scrollToBottom();
   }
 
-  modelSelect.addEventListener("change", () => updateState({ model: modelSelect.value }));
-  modeSelect.addEventListener("change", () => updateState({ mode: modeSelect.value }));
+  /* ---------- streaming ---------- */
 
-  function handleEvent(event, data, target) {
+  function startAssistant() {
+    const wrap = el("div", "msg assistant");
+    const block = el("div", "md");
+    wrap.appendChild(block);
+    thread.appendChild(wrap);
+    setHasChat(true);
+    current = {
+      wrap,
+      mdEl: block,
+      text: "",
+      thinking: null,
+      tool: null,
+      scheduled: false,
+    };
+    return current;
+  }
+
+  function scheduleRender() {
+    if (!current || current.scheduled) return;
+    current.scheduled = true;
+    requestAnimationFrame(() => {
+      if (!current) return;
+      current.scheduled = false;
+      renderMarkdownInto(current.mdEl, current.text);
+      scrollIfNear();
+    });
+  }
+
+  function handleEvent(event, data) {
+    if (window.__agentEventLog.length < 500) window.__agentEventLog.push(event);
     switch (event) {
       case "start":
-        return;
+        break;
       case "text":
-        target.bubble.textContent += data.text;
+        if (!current) startAssistant();
+        current.text += data.text || "";
+        scheduleRender();
         break;
       case "thinking":
-        if (!target.thinking) target.thinking = addThinking();
-        target.thinking.textContent += data.text;
+        if (!current) startAssistant();
+        if (!current.thinking) current.thinking = addThinking(current.wrap);
+        current.thinking.textContent += data.text || "";
         break;
       case "tool_start":
-        target.currentTool = addTool(data.name, data.summary);
+        if (!current) startAssistant();
+        current.tool = addToolCard(
+          current.wrap,
+          data.name,
+          data.summary,
+          "running…",
+          false,
+          true,
+        );
+        scrollIfNear();
         break;
       case "tool_end":
-        if (target.currentTool) {
-          target.currentTool.pre.textContent = data.content || "(no output)";
-          if (data.isError) target.currentTool.details.classList.add("error");
-          target.currentTool = null;
+        if (current && current.tool) {
+          current.tool.pre.textContent = data.content || "(no output)";
+          if (data.isError) current.tool.details.classList.add("error");
+          current.tool = null;
         }
         break;
       case "notice":
         addNotice(data.text);
         break;
-      case "subagent_start":
-        addNotice(
-          "subagent " + data.name + " (" + data.subagentType + ") · " + data.description,
-        );
-        break;
-      case "subagent_end":
-        addNotice("subagent " + data.name + (data.ok ? " finished" : " failed"));
-        break;
-      case "error":
-        addError(data.message);
+      case "session_title":
+        state.title = data.title || "New chat";
+        titleEl.textContent = state.title;
+        refreshSessions();
         break;
       case "approval":
         addApproval(data);
@@ -239,42 +481,23 @@
       case "plan_approval":
         addPlanApproval(data);
         break;
+      case "subagent_start":
+        addNotice(`subagent ${data.name} (${data.subagentType}) · ${data.description}`);
+        break;
+      case "subagent_end":
+        addNotice(`subagent ${data.name} ${data.ok ? "finished" : "failed"}`);
+        break;
+      case "error":
+        if (!/abort/i.test(String(data.message || ""))) addError(data.message);
+        break;
       case "step":
-        break;
-      case "update":
-        addNotice(
-          "update " + data.status + (data.version ? " · " + data.version : ""),
-        );
-        break;
       case "done":
-        if (data && data.used !== undefined) {
-          addNotice("context ~" + data.used + " / " + data.budget + " tokens");
-        }
+      case "usage":
         break;
     }
-    scrollIfNearBottom();
   }
 
-  async function runTurn(text, images = []) {
-    if (running) return;
-    running = true;
-    send.disabled = true;
-    addUser(text, images);
-    const target = { bubble: addAssistant(), thinking: null, currentTool: null };
-    try {
-      await bridge.chat(
-        text,
-        images.map(({ data, mimeType, name }) => ({ data, mimeType, name })),
-        (event, data) => handleEvent(event, data, target),
-      );
-    } catch (error) {
-      addError(error instanceof Error ? error.message : String(error));
-    } finally {
-      running = false;
-      send.disabled = false;
-      input.focus();
-    }
-  }
+  /* ---------- attachments ---------- */
 
   const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
 
@@ -305,7 +528,7 @@
 
   function renderPreviews() {
     previews.innerHTML = "";
-    stagedImages.forEach((image, index) => {
+    state.stagedImages.forEach((image, index) => {
       const chip = el("div", "chip");
       const img = document.createElement("img");
       img.src = image.dataUrl;
@@ -314,7 +537,7 @@
       remove.type = "button";
       remove.title = "Remove";
       remove.addEventListener("click", () => {
-        stagedImages.splice(index, 1);
+        state.stagedImages.splice(index, 1);
         renderPreviews();
       });
       chip.append(img, remove);
@@ -324,12 +547,12 @@
 
   async function addFiles(files) {
     for (const file of files) {
-      if (stagedImages.length >= 8) {
+      if (state.stagedImages.length >= 8) {
         addError("At most 8 images per message.");
         break;
       }
       try {
-        stagedImages.push(await readFileAsAttachment(file));
+        state.stagedImages.push(await readFileAsAttachment(file));
       } catch (error) {
         addError(error instanceof Error ? error.message : String(error));
       }
@@ -337,44 +560,389 @@
     renderPreviews();
   }
 
-  attachButton.addEventListener("click", () => fileInput.click());
+  attach.addEventListener("click", () => fileInput.click());
   fileInput.addEventListener("change", () => {
-    const files = Array.from(fileInput.files ?? []);
+    const files = Array.from(fileInput.files || []);
     fileInput.value = "";
     if (files.length > 0) void addFiles(files);
   });
   input.addEventListener("paste", (event) => {
-    const files = Array.from(event.clipboardData?.files ?? []).filter((file) =>
-      file.type.startsWith("image/"),
-    );
+    const files = Array.from((event.clipboardData && event.clipboardData.files) || [])
+      .filter((file) => file.type.startsWith("image/"));
     if (files.length > 0) {
       event.preventDefault();
       void addFiles(files);
     }
   });
 
-  document.getElementById("composer").addEventListener("submit", (event) => {
+  /* ---------- sessions ---------- */
+
+  function sessionIdFromPath(file) {
+    if (!file) return null;
+    return String(file).split(/[\\/]/).pop().replace(/\.jsonl$/, "");
+  }
+
+  function groupLabel(iso) {
+    const date = new Date(iso);
+    if (Number.isNaN(date.getTime())) return "Older";
+    const now = new Date();
+    const startOf = (value) =>
+      new Date(value.getFullYear(), value.getMonth(), value.getDate()).getTime();
+    const days = Math.round((startOf(now) - startOf(date)) / 86400000);
+    if (days <= 0) return "Today";
+    if (days === 1) return "Yesterday";
+    if (days < 7) return "Previous 7 days";
+    if (days < 30) return "Previous 30 days";
+    return date.toLocaleDateString(undefined, { month: "long", year: "numeric" });
+  }
+
+  function renderSessions() {
+    const filter = searchEl.value.trim().toLowerCase();
+    chatsEl.innerHTML = "";
+    const groups = new Map();
+    for (const session of state.sessions) {
+      if (filter && !String(session.title || "").toLowerCase().includes(filter)) {
+        continue;
+      }
+      const label = groupLabel(session.updatedAt);
+      if (!groups.has(label)) groups.set(label, []);
+      groups.get(label).push(session);
+    }
+    if (groups.size === 0) {
+      chatsEl.appendChild(
+        el("div", "empty-list", filter ? "No matching chats" : "No chats yet"),
+      );
+      return;
+    }
+    for (const [label, items] of groups) {
+      chatsEl.appendChild(el("div", "chat-group", label));
+      for (const session of items) chatsEl.appendChild(renderChatItem(session));
+    }
+  }
+
+  function renderChatItem(session) {
+    const item = el(
+      "div",
+      `chat-item${session.id === state.sessionId ? " active" : ""}`,
+    );
+    const name = el("div", "name", session.title || "New chat");
+    const actions = el("div", "actions");
+    const rename = el("button", "", "✎");
+    rename.type = "button";
+    rename.title = "Rename";
+    rename.addEventListener("click", (event) => {
+      event.stopPropagation();
+      startRename(item, session);
+    });
+    const remove = el("button", "", "×");
+    remove.type = "button";
+    remove.title = "Delete";
+    remove.addEventListener("click", (event) => {
+      event.stopPropagation();
+      void removeSession(session);
+    });
+    actions.append(rename, remove);
+    item.append(name, actions);
+    item.addEventListener("click", () => void selectSession(session.id));
+    name.addEventListener("dblclick", (event) => {
+      event.stopPropagation();
+      startRename(item, session);
+    });
+    return item;
+  }
+
+  function startRename(item, session) {
+    const name = item.querySelector(".name");
+    if (!name) return;
+    const inputEl = document.createElement("input");
+    inputEl.value = session.title || "New chat";
+    name.replaceWith(inputEl);
+    inputEl.focus();
+    inputEl.select();
+    let finished = false;
+
+    const finish = async (save) => {
+      if (finished) return;
+      finished = true;
+      const value = inputEl.value.trim();
+      const restored = el("div", "name", session.title || "New chat");
+      inputEl.replaceWith(restored);
+      if (!save || !value || value === session.title) return;
+      try {
+        const result = await bridge.renameSession(session.id, value);
+        session.title = result.title || value;
+        if (session.id === state.sessionId) {
+          state.title = session.title;
+          titleEl.textContent = session.title;
+        }
+        await refreshSessions();
+      } catch (error) {
+        addError(error instanceof Error ? error.message : String(error));
+      }
+    };
+
+    inputEl.addEventListener("blur", () => void finish(true));
+    inputEl.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        void finish(true);
+      } else if (event.key === "Escape") {
+        event.preventDefault();
+        void finish(false);
+      }
+    });
+  }
+
+  async function removeSession(session) {
+    if (!confirm(`Delete “${session.title || "New chat"}”? This removes its transcript.`)) {
+      return;
+    }
+    try {
+      const next = await bridge.deleteSession(session.id);
+      if (session.id === state.sessionId) {
+        applyState(next);
+        state.title = "New chat";
+        titleEl.textContent = state.title;
+        thread.innerHTML = "";
+        setHasChat(false);
+      }
+      await refreshSessions();
+    } catch (error) {
+      addError(error instanceof Error ? error.message : String(error));
+    }
+  }
+
+  async function selectSession(id) {
+    if (state.running) {
+      addNotice("Stop the current turn before switching chats.");
+      return;
+    }
+    if (id === state.sessionId && thread.childElementCount > 0) return;
+    try {
+      const data = await bridge.loadSession(id);
+      applyState(data);
+      state.sessionId = id;
+      state.title = data.title || "New chat";
+      titleEl.textContent = state.title;
+      renderHistory(data.messages || []);
+      await refreshSessions();
+    } catch (error) {
+      addError(error instanceof Error ? error.message : String(error));
+    }
+  }
+
+  async function newChat() {
+    if (state.running) {
+      addNotice("Stop the current turn before starting a new chat.");
+      return;
+    }
+    try {
+      const data = await bridge.newSession();
+      applyState(data);
+      state.sessionId = sessionIdFromPath(data.session) || state.sessionId;
+      state.title = "New chat";
+      titleEl.textContent = state.title;
+      thread.innerHTML = "";
+      setHasChat(false);
+      await refreshSessions();
+      input.focus();
+    } catch (error) {
+      addError(error instanceof Error ? error.message : String(error));
+    }
+  }
+
+  async function refreshSessions() {
+    try {
+      const data = await bridge.listSessions();
+      state.sessions = data.sessions || [];
+      if (data.current) state.sessionId = data.current;
+      renderSessions();
+    } catch {
+      // Listing is best-effort; do not interrupt the conversation.
+    }
+  }
+
+  newChatBtn.addEventListener("click", () => void newChat());
+  searchEl.addEventListener("input", renderSessions);
+
+  /* ---------- turn control ---------- */
+
+  function setRunning(running) {
+    state.running = running;
+    send.hidden = running;
+    stop.hidden = !running;
+    stop.disabled = false;
+  }
+
+  stop.addEventListener("click", async () => {
+    stop.disabled = true;
+    addNotice("stopping…");
+    try {
+      await bridge.cancel();
+    } catch {
+      // The run may already have finished.
+    }
+  });
+
+  async function runTurn(text) {
+    if (state.running) return;
+    if (!text && state.stagedImages.length === 0) return;
+
+    const images = state.stagedImages.slice();
+    state.stagedImages = [];
+    renderPreviews();
+
+    setRunning(true);
+    addUserMessage(text, images);
+    startAssistant();
+
+    try {
+      await bridge.chat(
+        text,
+        images.map(({ data, mimeType, name }) => ({ data, mimeType, name })),
+        handleEvent,
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (!/abort/i.test(message)) addError(message);
+    } finally {
+      if (current) {
+        renderMarkdownInto(current.mdEl, current.text);
+        scrollIfNear();
+      }
+      current = null;
+      setRunning(false);
+      window.__agentTurns = (window.__agentTurns || 0) + 1;
+      void refreshSessions();
+      input.focus();
+    }
+  }
+
+  composer.addEventListener("submit", (event) => {
     event.preventDefault();
     const text = input.value.trim();
-    if (!text) return;
-    const images = stagedImages;
-    stagedImages = [];
-    renderPreviews();
+    if (!text && state.stagedImages.length === 0) return;
     input.value = "";
-    runTurn(text, images);
+    autoGrow();
+    void runTurn(text);
   });
 
   input.addEventListener("keydown", (event) => {
     if (event.key === "Enter" && !event.shiftKey) {
       event.preventDefault();
-      document.getElementById("composer").requestSubmit();
+      composer.requestSubmit();
     }
   });
 
-  input.addEventListener("input", () => {
+  function autoGrow() {
     input.style.height = "auto";
     input.style.height = Math.min(input.scrollHeight, 220) + "px";
+  }
+
+  input.addEventListener("input", autoGrow);
+
+  for (const suggestion of document.querySelectorAll(".suggestion")) {
+    suggestion.addEventListener("click", () => {
+      const prompt = suggestion.dataset.prompt || "";
+      input.value = "";
+      autoGrow();
+      void runTurn(prompt);
+    });
+  }
+
+  /* ---------- state ---------- */
+
+  function applyState(data) {
+    if (!data || typeof data !== "object") return;
+    if (data.model) {
+      state.model = data.model;
+      if (![...modelSelect.options].some((option) => option.value === data.model)) {
+        const option = el("option", "", data.model);
+        option.value = data.model;
+        modelSelect.appendChild(option);
+      }
+      modelSelect.value = data.model;
+    }
+    if (data.mode) {
+      state.mode = data.mode;
+      modeSelect.value = data.mode;
+    }
+    if (data.session) {
+      state.sessionId = sessionIdFromPath(data.session) || state.sessionId;
+    }
+    if (Array.isArray(data.mcp)) updateMcp(data.mcp);
+  }
+
+  function updateMcp(servers) {
+    if (!servers || servers.length === 0) {
+      mcpEl.textContent = "No MCP servers";
+      mcpEl.title = "";
+      return;
+    }
+    const ok = servers.filter((server) => server.ok).length;
+    mcpEl.textContent = `MCP ${ok}/${servers.length} connected`;
+    mcpEl.title = servers
+      .map(
+        (server) =>
+          `${server.name}: ${server.ok ? `${server.toolCount} tool(s)` : server.error || "failed"}`,
+      )
+      .join("\n");
+  }
+
+  function populateModels(data, current) {
+    const models = (data && data.models) || [];
+    modelSelect.innerHTML = "";
+    for (const model of models) {
+      const option = el("option", "", model.name);
+      option.value = model.name;
+      modelSelect.appendChild(option);
+    }
+    const selected = current || (models[0] && models[0].name) || "";
+    if (selected) {
+      if (![...modelSelect.options].some((option) => option.value === selected)) {
+        const option = el("option", "", selected);
+        option.value = selected;
+        modelSelect.appendChild(option);
+      }
+      modelSelect.value = selected;
+    }
+  }
+
+  modelSelect.addEventListener("change", async () => {
+    try {
+      const result = await bridge.setState({ model: modelSelect.value });
+      applyState(result);
+    } catch (error) {
+      addError(error instanceof Error ? error.message : String(error));
+    }
   });
 
-  loadState().catch((error) => addError(error.message));
+  modeSelect.addEventListener("change", async () => {
+    try {
+      const result = await bridge.setState({ mode: modeSelect.value });
+      applyState(result);
+    } catch (error) {
+      addError(error instanceof Error ? error.message : String(error));
+    }
+  });
+
+  async function init() {
+    try {
+      const stateData = await bridge.getState();
+      applyState(stateData);
+      titleEl.textContent = state.title;
+    } catch (error) {
+      addError(error instanceof Error ? error.message : String(error));
+    }
+    try {
+      const models = await bridge.getModels();
+      populateModels(models, state.model);
+    } catch (error) {
+      addError(`Models unavailable: ${error instanceof Error ? error.message : error}`);
+    }
+    await refreshSessions();
+    input.focus();
+  }
+
+  void init();
 })();

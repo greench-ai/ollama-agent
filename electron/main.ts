@@ -16,6 +16,12 @@ import {
   type PermissionMode,
 } from "../src/core/permissions.ts";
 import { Session } from "../src/core/session.ts";
+import {
+  deleteSession,
+  listSessions,
+  loadSession,
+  renameSession,
+} from "../src/core/sessions.ts";
 import { loadMcpConfig } from "../src/mcp/config.ts";
 import { McpManager } from "../src/mcp/manager.ts";
 import { allTools } from "../src/tools/index.ts";
@@ -88,6 +94,7 @@ let permissions: PermissionEngine;
 let session: Session;
 let mcp: McpManager | undefined;
 let busy = false;
+let currentRun: AbortController | null = null;
 const approvals = new Map<string, (outcome: AskOutcome) => void>();
 const planApprovals = new Map<
   string,
@@ -149,7 +156,7 @@ function statePayload() {
     model: agent.model,
     mode: permissions.mode,
     cwd: options.cwd,
-    session: session.file,
+    session: agent.session.file,
     mcp: mcp?.servers ?? [],
     resources: mcp?.resources ?? [],
     prompts: mcp?.prompts ?? [],
@@ -180,6 +187,9 @@ function forwardAgentEvent(event: AgentEvent): void {
       break;
     case "notice":
       sendEvent("notice", { text: event.text });
+      break;
+    case "session_title":
+      sendEvent("session_title", { title: event.title });
       break;
     case "subagent_start":
       sendEvent("subagent_start", {
@@ -270,7 +280,7 @@ function registerIpc(): void {
       const patch = asRecord(payload);
       if (typeof patch.model === "string" && patch.model.trim()) {
         agent.model = patch.model.trim();
-        session.model = agent.model;
+        agent.session.model = agent.model;
       }
       if (typeof patch.mode === "string") {
         if (!PERMISSION_MODES.includes(patch.mode as PermissionMode)) {
@@ -339,14 +349,71 @@ function registerIpc(): void {
     }
 
     busy = true;
+    const controller = new AbortController();
+    agent.signal = controller.signal;
+    currentRun = controller;
     sendEvent("start", { model: agent.model, mode: permissions.mode });
     try {
       await agent.run(message, images.length > 0 ? images : undefined);
     } finally {
+      currentRun = null;
+      agent.signal = undefined;
       sendEvent("done", agent.contextUsage());
       busy = false;
     }
     return { ok: true };
+  });
+
+  ipcMain.handle("agent:cancel", () => {
+    currentRun?.abort();
+    return { ok: true };
+  });
+
+  ipcMain.handle("sessions:list", async () => ({
+    sessions: await listSessions(),
+    current: agent.session.id,
+  }));
+
+  ipcMain.handle("sessions:new", async () => {
+    if (agent.messages.length === 0) {
+      return { ...statePayload(), title: "New chat" };
+    }
+    const next = await Session.create({ cwd: options.cwd, model: agent.model });
+    agent.restore(next, []);
+    return { ...statePayload(), title: "New chat" };
+  });
+
+  ipcMain.handle("sessions:load", async (_event, payload: unknown) => {
+    const id = asRecord(payload).id;
+    if (typeof id !== "string" || !id) throw new Error("Missing session id.");
+    const loaded = await loadSession(id);
+    const opened = await Session.open(id);
+    agent.restore(opened, loaded.messages);
+    if (loaded.model) {
+      agent.model = loaded.model;
+      agent.session.model = loaded.model;
+    }
+    return { ...statePayload(), title: loaded.title, messages: loaded.messages };
+  });
+
+  ipcMain.handle("sessions:rename", async (_event, payload: unknown) => {
+    const body = asRecord(payload);
+    const id = typeof body.id === "string" ? body.id : "";
+    const title = typeof body.title === "string" ? body.title : "";
+    if (!id) throw new Error("Missing session id.");
+    const cleaned = await renameSession(id, title);
+    return { id, title: cleaned };
+  });
+
+  ipcMain.handle("sessions:delete", async (_event, payload: unknown) => {
+    const id = asRecord(payload).id;
+    if (typeof id !== "string" || !id) throw new Error("Missing session id.");
+    await deleteSession(id);
+    if (agent.session.id === id) {
+      const next = await Session.create({ cwd: options.cwd, model: agent.model });
+      agent.restore(next, []);
+    }
+    return statePayload();
   });
 }
 
@@ -512,14 +579,16 @@ async function createWindow(): Promise<void> {
     void (async () => {
       try {
         const stateInfo = await mainWindow?.webContents.executeJavaScript(
-          `window.agentBridge.getState().then((s) => JSON.stringify({ model: s.model, mode: s.mode, mcp: s.mcp.length, appLoaded: Boolean(window.__agentAppLoaded) }))`,
+          `Promise.all([window.agentBridge.getState(), window.agentBridge.listSessions()]).then(([s, l]) => JSON.stringify({ model: s.model, mode: s.mode, mcp: s.mcp.length, sessions: l.sessions.length, appLoaded: Boolean(window.__agentAppLoaded) }))`,
         );
         console.log("[electron] ipc state:", stateInfo);
         if (process.env.AGENT_SMOKE_CHAT) {
           const imagePath = process.env.AGENT_SMOKE_IMAGE;
-          const prompt = imagePath
-            ? "What number is shown? Answer with just the number."
-            : "Reply with exactly: ipc ok";
+          const prompt =
+            process.env.AGENT_SMOKE_PROMPT ||
+            (imagePath
+              ? "What number is shown? Answer with just the number."
+              : "Reply with exactly: ipc ok");
           let images = "[]";
           if (imagePath) {
             const buffer = await readFile(imagePath);
@@ -531,16 +600,57 @@ async function createWindow(): Promise<void> {
               },
             ]);
           }
-          const chat = await mainWindow?.webContents.executeJavaScript(`
-            new Promise((resolve) => {
-              let text = "";
-              window.agentBridge.chat(${JSON.stringify(prompt)}, ${images}, (event, data) => {
-                if (event === "text") text += data.text;
-                if (event === "done") resolve(JSON.stringify({ text }));
-              }).catch((error) => resolve("error: " + error.message));
-            })
-          `);
-          console.log("[electron] ipc chat:", chat);
+          if (imagePath) {
+            const chat = await mainWindow?.webContents.executeJavaScript(`
+              new Promise((resolve) => {
+                let text = "";
+                const events = [];
+                const timer = setTimeout(() => resolve(JSON.stringify({ timeout: true, text, events })), 90000);
+                window.agentBridge.chat(${JSON.stringify(prompt)}, ${images}, (event, data) => {
+                  events.push(event);
+                  if (event === "text") text += data.text;
+                  if (event === "done") {
+                    clearTimeout(timer);
+                    resolve(JSON.stringify({ text, events }));
+                  }
+                }).catch((error) => { clearTimeout(timer); resolve("error: " + error.message); });
+              })
+            `);
+            console.log("[electron] ipc chat:", chat);
+          } else {
+            const chat = await mainWindow?.webContents.executeJavaScript(`
+              (async () => {
+                const before = window.__agentTurns || 0;
+                const input = document.getElementById("input");
+                input.value = ${JSON.stringify(prompt)};
+                input.dispatchEvent(new Event("input", { bubbles: true }));
+                document.getElementById("composer").requestSubmit();
+                const deadline = Date.now() + 120000;
+                while ((window.__agentTurns || 0) <= before) {
+                  if (Date.now() > deadline) {
+                    return JSON.stringify({ timeout: true, events: window.__agentEventLog, errors: window.__agentErrors });
+                  }
+                  await new Promise((resolve) => setTimeout(resolve, 300));
+                }
+                const thread = document.getElementById("thread");
+                return JSON.stringify({
+                  messages: thread.querySelectorAll(".msg").length,
+                  text: thread.innerText.slice(0, 300),
+                  events: window.__agentEventLog,
+                  errors: window.__agentErrors,
+                });
+              })()
+            `);
+            console.log("[electron] ui chat:", chat);
+          }
+        }
+        if (process.env.AGENT_SMOKE_SCREENSHOT) {
+          await new Promise((resolve) => setTimeout(resolve, 1200));
+          const image = await mainWindow?.webContents.capturePage();
+          if (image) {
+            await writeFile(process.env.AGENT_SMOKE_SCREENSHOT, image.toPNG());
+            console.log("[electron] screenshot saved");
+          }
         }
       } catch (error) {
         console.error(

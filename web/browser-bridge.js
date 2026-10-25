@@ -32,6 +32,18 @@
     approvePlan: (id, approved, feedback) =>
       post("/api/approve-plan", { id, approved, feedback }),
 
+    cancel: () => post("/api/cancel", {}),
+
+    listSessions: () => fetch("/api/sessions").then((response) => response.json()),
+
+    newSession: () => post("/api/sessions/new", {}),
+
+    loadSession: (id) => post("/api/sessions/load", { id }),
+
+    renameSession: (id, title) => post("/api/sessions/rename", { id, title }),
+
+    deleteSession: (id) => post("/api/sessions/delete", { id }),
+
     async chat(message, images, onEvent) {
       const response = await fetch("/api/chat", {
         method: "POST",

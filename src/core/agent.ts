@@ -31,6 +31,7 @@ export type AgentEvent =
   | { type: "usage"; usage: Usage }
   | { type: "turn_end" }
   | { type: "error"; message: string }
+  | { type: "session_title"; title: string }
   | {
       type: "subagent_start";
       name: string;
@@ -132,6 +133,12 @@ export class Agent {
     const userMessage: Message = { role: "user", content };
     this.messages.push(userMessage);
     await this.session.appendMessage(userMessage);
+
+    if (this.messages.length === 1) {
+      const title = userText.replace(/\s+/g, " ").trim().slice(0, 80) || "New chat";
+      await this.session.setTitle(title).catch(() => {});
+      this.onEvent({ type: "session_title", title });
+    }
 
     for (let turn = 0; turn < this.maxTurns; turn += 1) {
       const compacted = compactMessages(this.messages, this.contextBudget());
@@ -434,6 +441,13 @@ export class Agent {
   /** Clear the conversation (used by the CLI's /clear). */
   reset(): void {
     this.messages = [];
+    this.todos = [];
+  }
+
+  /** Replace the active session and conversation (session switching). */
+  restore(session: Session, messages: Message[]): void {
+    this.session = session;
+    this.messages = [...messages];
     this.todos = [];
   }
 }

@@ -209,12 +209,23 @@ HTTP API:
 | POST | `/api/approve` | answer an `approval` event (`id`, `decision`) |
 | POST | `/api/approve-plan` | answer a `plan_approval` event (`id`, `approved`, `feedback?`) |
 | POST | `/api/reset` | clear the conversation |
+| GET | `/api/sessions` | list sessions and the current id |
+| POST | `/api/sessions/new` | start a new session (reuses an empty one) |
+| POST | `/api/sessions/load` | load `{id}` and return its messages |
+| POST | `/api/sessions/rename` | rename `{id, title}` |
+| POST | `/api/sessions/delete` | delete `{id}` |
+| POST | `/api/cancel` | abort the running turn |
 
 SSE events: `start`, `thinking`, `text`, `tool_start`, `tool_end`, `notice`,
-`subagent_start`, `subagent_end`, `error`, `approval`, `plan_approval`, `step`,
-`done` (with `used`/`budget`). The bundled web client (`web/index.html`) renders
-streaming text, thinking, tool cards, subagent progress, attachment previews,
-and approval prompts. It is deliberately plain — the shell comes later.
+`subagent_start`, `subagent_end`, `session_title`, `error`, `approval`,
+`plan_approval`, `step`, `done` (with `used`/`budget`).
+
+The bundled client (`web/index.html`) is the desktop shell: collapsible sidebar
+with searchable chat history (rename/delete/resume), centered empty state,
+markdown with syntax-highlighted code and copy buttons, collapsible thinking,
+tool cards, attachment previews, approval cards, a stop button, and a
+system/light/dark theme toggle. Session switching and cancellation work in both
+Electron (IPC) and browser (HTTP) modes.
 
 ## Desktop shell (Electron)
 
@@ -326,13 +337,15 @@ Wine; the macOS zip builds unsigned; dmg and signing require macOS.
 
 ## Status
 
-Early. Implemented: streaming, tool loop, permissions, sessions, 8 built-in
-tools (including `Task` subagents with isolated context), image input (user
-attachments, Read on images, MCP image results), an MCP client (stdio +
-Streamable HTTP; tools, resources, prompts, pagination, annotations, reconnect,
-OAuth authorization-code + PKCE with discovery and dynamic client registration),
-a local HTTP/SSE server with a web client, an Electron shell with a sandboxed
-renderer, IPC approvals, plan-mode propose/approve/apply, CSP, window-state
-persistence, menus, Linux packaging (AppImage + deb), cross-platform CI
-packaging (Windows NSIS/zip, macOS dmg/zip x64 + arm64), and electron-updater
-wiring. Not yet: code signing/notarization.
+Early. Implemented: streaming, tool loop, permissions, sessions with a
+Claude-Desktop-style shell (sidebar, searchable history, rename/delete/resume,
+markdown rendering, stop button, themes), 8 built-in tools (including `Task`
+subagents with isolated context), image input (user attachments, Read on
+images, MCP image results), an MCP client (stdio + Streamable HTTP; tools,
+resources, prompts, pagination, annotations, reconnect, OAuth authorization-code
++ PKCE with discovery and dynamic client registration), a local HTTP/SSE server
+with the same web client, an Electron shell with a sandboxed renderer, IPC
+approvals, plan-mode propose/approve/apply, CSP, window-state persistence, menus,
+Linux packaging (AppImage + deb), cross-platform CI packaging (Windows
+NSIS/zip, macOS dmg/zip x64 + arm64), and electron-updater wiring. Not yet: code
+signing/notarization, projects, artifacts, and settings/connector management.

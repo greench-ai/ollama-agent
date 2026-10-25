@@ -15,6 +15,12 @@ import {
   type PermissionMode,
 } from "./core/permissions.ts";
 import { Session } from "./core/session.ts";
+import {
+  deleteSession,
+  listSessions,
+  loadSession,
+  renameSession,
+} from "./core/sessions.ts";
 import { loadMcpConfig } from "./mcp/config.ts";
 import { McpManager } from "./mcp/manager.ts";
 import { allTools } from "./tools/index.ts";
@@ -169,6 +175,7 @@ async function main(): Promise<void> {
   type Stream = { send: (event: string, data: unknown) => void };
   let stream: Stream | undefined;
   let busy = false;
+  let currentRun: AbortController | null = null;
   const approvals = new Map<string, (outcome: AskOutcome) => void>();
   const planApprovals = new Map<
     string,
@@ -252,6 +259,9 @@ async function main(): Promise<void> {
         case "notice":
           stream.send("notice", { text: event.text });
           break;
+        case "session_title":
+          stream.send("session_title", { title: event.title });
+          break;
         case "subagent_start":
           stream.send("subagent_start", {
             name: event.name,
@@ -281,12 +291,23 @@ async function main(): Promise<void> {
     },
   });
 
+  const statePayload = () => ({
+    model: agent.model,
+    mode: permissions.mode,
+    cwd: options.cwd,
+    session: agent.session.file,
+    mcp: mcp?.servers ?? [],
+    resources: mcp?.resources ?? [],
+    prompts: mcp?.prompts ?? [],
+  });
+
   const here = path.dirname(fileURLToPath(import.meta.url));
   const webDir = path.join(here, "..", "web");
   const staticFiles: Record<string, string> = {
     "/": "index.html",
     "/index.html": "index.html",
     "/app.js": "app.js",
+    "/markdown.js": "markdown.js",
     "/browser-bridge.js": "browser-bridge.js",
   };
 
@@ -306,15 +327,7 @@ async function main(): Promise<void> {
       }
 
       if (request.method === "GET" && url.pathname === "/api/state") {
-        json(response, 200, {
-          model: agent.model,
-          mode: permissions.mode,
-          cwd: options.cwd,
-          session: session.file,
-          mcp: mcp?.servers ?? [],
-          resources: mcp?.resources ?? [],
-          prompts: mcp?.prompts ?? [],
-        });
+        json(response, 200, statePayload());
         return;
       }
 
@@ -327,7 +340,7 @@ async function main(): Promise<void> {
         const body = await readJson(request);
         if (typeof body.model === "string" && body.model.trim()) {
           agent.model = body.model.trim();
-          session.model = agent.model;
+          agent.session.model = agent.model;
         }
         if (typeof body.mode === "string") {
           if (!PERMISSION_MODES.includes(body.mode as PermissionMode)) {
@@ -337,6 +350,81 @@ async function main(): Promise<void> {
           permissions.setMode(body.mode as PermissionMode);
         }
         json(response, 200, { model: agent.model, mode: permissions.mode });
+        return;
+      }
+
+      if (request.method === "GET" && url.pathname === "/api/sessions") {
+        json(response, 200, {
+          sessions: await listSessions(),
+          current: agent.session.id,
+        });
+        return;
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/sessions/new") {
+        if (agent.messages.length === 0) {
+          json(response, 200, { ...statePayload(), title: "New chat" });
+          return;
+        }
+        const next = await Session.create({ cwd: options.cwd, model: agent.model });
+        agent.restore(next, []);
+        json(response, 200, { ...statePayload(), title: "New chat" });
+        return;
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/sessions/load") {
+        const body = await readJson(request);
+        const id = typeof body.id === "string" ? body.id : "";
+        if (!id) {
+          json(response, 400, { error: "Missing session id." });
+          return;
+        }
+        const loaded = await loadSession(id);
+        const opened = await Session.open(id);
+        agent.restore(opened, loaded.messages);
+        if (loaded.model) {
+          agent.model = loaded.model;
+          agent.session.model = loaded.model;
+        }
+        json(response, 200, {
+          ...statePayload(),
+          title: loaded.title,
+          messages: loaded.messages,
+        });
+        return;
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/sessions/rename") {
+        const body = await readJson(request);
+        const id = typeof body.id === "string" ? body.id : "";
+        const title = typeof body.title === "string" ? body.title : "";
+        if (!id) {
+          json(response, 400, { error: "Missing session id." });
+          return;
+        }
+        json(response, 200, { id, title: await renameSession(id, title) });
+        return;
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/sessions/delete") {
+        const body = await readJson(request);
+        const id = typeof body.id === "string" ? body.id : "";
+        if (!id) {
+          json(response, 400, { error: "Missing session id." });
+          return;
+        }
+        await deleteSession(id);
+        if (agent.session.id === id) {
+          const next = await Session.create({ cwd: options.cwd, model: agent.model });
+          agent.restore(next, []);
+        }
+        json(response, 200, statePayload());
+        return;
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/cancel") {
+        currentRun?.abort();
+        json(response, 200, { ok: true });
         return;
       }
 
@@ -425,6 +513,7 @@ async function main(): Promise<void> {
 
         const controller = new AbortController();
         agent.signal = controller.signal;
+        currentRun = controller;
         // response "close" means the client went away; abort the turn.
         response.on("close", () => controller.abort());
 
@@ -436,6 +525,8 @@ async function main(): Promise<void> {
             message: error instanceof Error ? error.message : String(error),
           });
         } finally {
+          currentRun = null;
+          agent.signal = undefined;
           send("done", agent.contextUsage());
           stream = undefined;
           busy = false;
