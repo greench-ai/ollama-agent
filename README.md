@@ -232,8 +232,8 @@ npm run package:linux      # AppImage + deb → release/
 
 Artifacts produced here:
 
-- `release/ollama-agent-0.1.1-x86_64.AppImage` (~121 MB)
-- `release/ollama-agent-0.1.1-amd64.deb` (~97 MB)
+- `release/ollama-agent-0.1.2-x86_64.AppImage` (~121 MB)
+- `release/ollama-agent-0.1.2-amd64.deb` (~97 MB)
 
 The asar contains only `dist-electron/`, `web/`, and `package.json`; the core is
 bundled, so no `node_modules` ships. The homepage/author/maintainer fields use
