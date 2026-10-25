@@ -261,6 +261,27 @@ GH_TOKEN=$(gh auth token) npx electron-builder --linux AppImage deb --x64 --publ
 electron-builder creates a draft release by default; publish it in the GitHub UI.
 `npm run release:linux` is the same command without the token.
 
+### Packaging (Windows / macOS)
+
+Windows and macOS builds run on native GitHub Actions runners
+(`.github/workflows/release.yml`) — the reliable path when developing on Linux:
+
+- **Windows**: NSIS installer + zip (x64), built on `windows-latest`
+- **macOS**: dmg + zip for x64 and arm64, built on `macos-13` / `macos-14`
+- **Linux**: AppImage + deb, built on `ubuntu-latest`
+
+Pushing a `v*` tag builds every platform and attaches the artifacts (plus
+`latest-linux.yml` / `latest.yml` / `latest-mac.yml`) to that release.
+`workflow_dispatch` only uploads run artifacts.
+
+Builds are **unsigned by default**. Provide `CSC_LINK` / `CSC_KEY_PASSWORD` (and
+Apple notarization credentials) as repository secrets to sign. Unsigned macOS
+apps are quarantined by Gatekeeper; unsigned Windows installers show a SmartScreen
+warning.
+
+Local cross-builds from Linux: the Windows **zip** works; the NSIS installer needs
+Wine; the macOS zip builds unsigned; dmg and signing require macOS.
+
 ### Security posture
 
 - `contextIsolation: true`, `sandbox: true`, `nodeIntegration: false`; the
@@ -290,5 +311,6 @@ Streamable HTTP; tools, resources, prompts, pagination, annotations, reconnect,
 OAuth authorization-code + PKCE), a local HTTP/SSE server with a web client, an
 Electron shell with a sandboxed renderer, IPC approvals, plan-mode
 propose/approve/apply, CSP, window-state persistence, menus, Linux packaging
-(AppImage + deb), and electron-updater wiring. Not yet: Windows/macOS packaging
+(AppImage + deb), cross-platform CI packaging (Windows NSIS/zip, macOS dmg/zip
+x64 + arm64), and electron-updater wiring. Not yet: code signing/notarization
 and MCP dynamic client registration/discovery.

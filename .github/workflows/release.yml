@@ -1,0 +1,86 @@
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: ${{ matrix.artifact }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            platform: linux
+            target: "AppImage deb"
+            artifact: linux
+          - os: windows-latest
+            platform: win
+            target: "nsis zip"
+            artifact: windows
+          - os: macos-13
+            platform: mac
+            target: "dmg zip --x64"
+            artifact: macos-x64
+          - os: macos-14
+            platform: mac
+            target: "dmg zip --arm64"
+            artifact: macos-arm64
+    runs-on: ${{ matrix.os }}
+    env:
+      # Unsigned builds by default; provide CSC_LINK/CSC_KEY_PASSWORD (and
+      # Apple credentials) as repository secrets to sign and notarize.
+      CSC_IDENTITY_AUTO_DISCOVERY: "false"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - run: npm ci
+      - name: Test
+        shell: bash
+        run: npm test
+      - name: Bundle Electron main and preload
+        shell: bash
+        run: npm run electron:build
+      - name: Build ${{ matrix.platform }} packages
+        shell: bash
+        run: npx electron-builder --${{ matrix.platform }} ${{ matrix.target }} --publish never
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          if-no-files-found: warn
+          path: |
+            release/*.AppImage
+            release/*.deb
+            release/*.exe
+            release/*.zip
+            release/*.dmg
+            release/*.yml
+            release/*.blockmap
+
+  attach:
+    name: attach assets to release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+      - name: Upload to GitHub release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          gh release view "$TAG" >/dev/null 2>&1 || \
+            gh release create "$TAG" --title "$TAG" --generate-notes
+          find dist -type f -print0 | xargs -0 -r gh release upload "$TAG" --clobber
