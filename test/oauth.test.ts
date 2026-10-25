@@ -170,8 +170,10 @@ test("ensureToken authorizes, persists 0600, and refreshes when expired", async 
     });
     assert.equal(first, "token-1");
 
-    const mode = (await stat(tokenStorePath())).mode & 0o777;
-    assert.equal(mode, 0o600);
+    if (process.platform !== "win32") {
+      const mode = (await stat(tokenStorePath())).mode & 0o777;
+      assert.equal(mode, 0o600, "token store must be private");
+    }
 
     const second = await ensureToken("srv", configFor(fixture.url).auth!, {
       openUrl: fakeBrowser,
