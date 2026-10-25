@@ -131,9 +131,12 @@ export class PermissionEngine {
  * removes obviously disallowed tools; per-call permission still runs.
  */
 export function toolsForMode(tools: Tool[], mode: PermissionMode): Tool[] {
-  if (mode === "bypassPermissions") return tools;
-  if (mode === "plan") return tools.filter((tool) => !tool.mutating);
-  return tools;
+  if (mode === "plan") {
+    // ExitPlanMode is the one tool that can end plan mode.
+    return tools.filter((tool) => !tool.mutating);
+  }
+  // Outside plan mode there is nothing to exit from.
+  return tools.filter((tool) => tool.name !== "ExitPlanMode");
 }
 
 export function formatPermissionBanner(

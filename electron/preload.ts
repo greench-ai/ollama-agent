@@ -18,6 +18,9 @@ const bridge = {
   approve: (id: string, decision: string) =>
     ipcRenderer.invoke("agent:approve", { id, decision }),
 
+  approvePlan: (id: string, approved: boolean, feedback?: string) =>
+    ipcRenderer.invoke("agent:approve-plan", { id, approved, feedback }),
+
   chat: async (
     message: string,
     images: Array<{ data: string; mimeType: string; name?: string }>,

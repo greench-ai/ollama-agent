@@ -2,6 +2,7 @@ import { readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
 import { agentHome } from "../core/session.ts";
+import type { OAuthConfig } from "./oauth.ts";
 
 export type McpServerConfig =
   | {
@@ -15,6 +16,7 @@ export type McpServerConfig =
       type?: "http" | "sse";
       url: string;
       headers?: Record<string, string>;
+      auth?: OAuthConfig;
     };
 
 export interface McpConfigResult {
@@ -37,6 +39,49 @@ function stringRecord(value: unknown): Record<string, string> | undefined {
     if (typeof entry === "string") out[key] = expandEnv(entry);
   }
   return out;
+}
+
+function parseOAuth(
+  value: unknown,
+  source: string,
+  name: string,
+): OAuthConfig | undefined {
+  if (value === undefined) return undefined;
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`${source}: server "${name}" auth must be an object.`);
+  }
+  const record = value as Record<string, unknown>;
+  if (
+    typeof record.authorizationUrl !== "string" ||
+    typeof record.tokenUrl !== "string" ||
+    typeof record.clientId !== "string"
+  ) {
+    throw new Error(
+      `${source}: server "${name}" auth needs authorizationUrl, tokenUrl, and clientId.`,
+    );
+  }
+  return {
+    authorizationUrl: expandEnv(record.authorizationUrl),
+    tokenUrl: expandEnv(record.tokenUrl),
+    clientId: expandEnv(record.clientId),
+    clientSecret:
+      typeof record.clientSecret === "string"
+        ? expandEnv(record.clientSecret)
+        : undefined,
+    scopes: Array.isArray(record.scopes)
+      ? record.scopes
+          .filter((scope): scope is string => typeof scope === "string")
+          .map(expandEnv)
+      : undefined,
+    redirectPort:
+      typeof record.redirectPort === "number" &&
+      Number.isFinite(record.redirectPort)
+        ? record.redirectPort
+        : undefined,
+    audience:
+      typeof record.audience === "string" ? expandEnv(record.audience) : undefined,
+    extraAuthorizationParams: stringRecord(record.extraAuthorizationParams),
+  };
 }
 
 export function parseMcpConfig(
@@ -68,6 +113,7 @@ export function parseMcpConfig(
         type,
         url: expandEnv(entry.url),
         headers: stringRecord(entry.headers),
+        auth: parseOAuth(entry.auth, source, name),
       };
       continue;
     }

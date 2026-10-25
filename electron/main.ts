@@ -89,6 +89,10 @@ let session: Session;
 let mcp: McpManager | undefined;
 let busy = false;
 const approvals = new Map<string, (outcome: AskOutcome) => void>();
+const planApprovals = new Map<
+  string,
+  (result: { approved: boolean; feedback?: string }) => void
+>();
 
 function sendEvent(event: string, data: unknown): void {
   mainWindow?.webContents.send("agent:event", { event, data });
@@ -121,6 +125,23 @@ const ask = async (request: {
       input: request.input,
     });
   }).finally(() => approvals.delete(id));
+};
+
+const planApprover = async (
+  plan: string,
+): Promise<{ approved: boolean; feedback?: string }> => {
+  if (!mainWindow) return { approved: false, feedback: "No window." };
+  const id = randomUUID();
+  return new Promise<{ approved: boolean; feedback?: string }>((resolve) => {
+    planApprovals.set(id, resolve);
+    const timer = setTimeout(() => {
+      if (planApprovals.delete(id)) {
+        resolve({ approved: false, feedback: "Plan approval timed out." });
+      }
+    }, 300_000);
+    timer.unref?.();
+    sendEvent("plan_approval", { id, plan });
+  }).finally(() => planApprovals.delete(id));
 };
 
 function statePayload() {
@@ -230,6 +251,7 @@ async function initCore(): Promise<void> {
     session,
     cwd: options.cwd,
     system: `You are a coding agent working in ${options.cwd}. Use absolute paths, read files before editing them, prefer Read/Grep/Glob over shell equivalents, and summarize what you changed when you finish.`,
+    planApprover,
     onEvent: forwardAgentEvent,
   });
 }
@@ -259,6 +281,22 @@ function registerIpc(): void {
       return { model: agent.model, mode: permissions.mode };
     },
   );
+
+  ipcMain.handle("agent:approve-plan", (_event, payload: unknown) => {
+    const body = asRecord(payload);
+    const id = typeof body.id === "string" ? body.id : "";
+    const resolver = planApprovals.get(id);
+    if (!resolver) throw new Error("Unknown plan approval id.");
+    planApprovals.delete(id);
+    resolver({
+      approved: body.approved === true,
+      feedback:
+        typeof body.feedback === "string"
+          ? body.feedback.slice(0, 2000)
+          : undefined,
+    });
+    return { ok: true };
+  });
 
   ipcMain.handle("agent:approve", (_event, payload: unknown) => {
     const body = asRecord(payload);

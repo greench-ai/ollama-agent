@@ -14,6 +14,7 @@ import {
 import { Session } from "./core/session.ts";
 import { loadMcpConfig } from "./mcp/config.ts";
 import { mcpPromptToText } from "./mcp/client.ts";
+import { clearToken } from "./mcp/oauth.ts";
 import { McpManager } from "./mcp/manager.ts";
 import { allTools } from "./tools/index.ts";
 import { TerminalRenderer, style } from "./ui/render.ts";
@@ -142,7 +143,8 @@ Options
 Slash commands
   /help  /models  /model <name>  /mode <mode>  /think [on|off]
   /image <path>  /images   (attach images to the next message)
-  /mcp [reconnect <server>]  /resources  /resource <server> <uri>
+  /mcp [reconnect <server>]  /mcp logout <server>
+  /resources  /resource <server> <uri>
   /prompts  /prompt <server> <name> [key=value ...]
   /clear  /session  /exit
 `;
@@ -317,6 +319,20 @@ async function main(): Promise<void> {
     }
   };
 
+  const planApprover = async (plan: string) => {
+    process.stdout.write(`\n${style.bold("Proposed plan")}\n${plan}\n\n`);
+    const answer = (
+      await readLine(style.cyan("Approve this plan and start editing? [y]es/[n]o › "))
+    )
+      .trim()
+      .toLowerCase();
+    if (answer === "y" || answer === "yes") return { approved: true };
+    const feedback = (
+      await readLine(style.dim("Feedback (optional) › "))
+    ).trim();
+    return { approved: false, feedback: feedback || undefined };
+  };
+
   const permissions = new PermissionEngine(options.mode, ask);
   const agent = new Agent({
     provider,
@@ -329,6 +345,7 @@ async function main(): Promise<void> {
     think: options.think,
     numCtx: options.numCtx,
     messages: prior,
+    planApprover,
     onEvent: (event) => renderer.handle(event),
   });
 
@@ -457,6 +474,16 @@ async function main(): Promise<void> {
               const detail = server.ok ? `${server.toolCount} tool(s)` : (server.error ?? "failed");
               console.log(`${mark} ${server.name} — ${detail}`);
             }
+            break;
+          }
+          if (rest[0] === "logout") {
+            const name = rest[1];
+            if (!name) {
+              console.log(style.dim("usage: /mcp logout <server>"));
+              break;
+            }
+            await clearToken(name);
+            console.log(style.dim(`cleared OAuth token for ${name}`));
             break;
           }
           for (const server of mcp.servers) {

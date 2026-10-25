@@ -1,5 +1,6 @@
 import { JsonRpcConnection, JsonRpcError } from "./jsonrpc.ts";
 import { HttpTransport, StdioTransport } from "./transports.ts";
+import { ensureToken } from "./oauth.ts";
 import type { McpServerConfig } from "./config.ts";
 import type { JsonSchema } from "../core/types.ts";
 
@@ -75,6 +76,8 @@ export interface McpPromptResult {
 export interface McpClientOptions {
   timeoutMs?: number;
   onLog?: (line: string) => void;
+  /** Injectable for tests; defaults to opening the system browser. */
+  openUrl?: (url: string) => Promise<void>;
 }
 
 export class McpClient {
@@ -103,6 +106,42 @@ export class McpClient {
     config: McpServerConfig,
     options: McpClientOptions = {},
   ): Promise<McpClient> {
+    let token: string | undefined;
+    if ("url" in config && config.auth) {
+      token = await ensureToken(name, config.auth, { openUrl: options.openUrl });
+    }
+
+    let attempts = 0;
+    while (true) {
+      try {
+        return await McpClient.connectOnce(name, config, options, token);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        const unauthorized = /401|unauthorized/i.test(message);
+        if (
+          !("url" in config) ||
+          !config.auth ||
+          !unauthorized ||
+          attempts >= 1
+        ) {
+          throw error;
+        }
+        // The cached token was rejected: refresh, then authorize if needed.
+        attempts += 1;
+        token = await ensureToken(name, config.auth, {
+          force: true,
+          openUrl: options.openUrl,
+        });
+      }
+    }
+  }
+
+  private static async connectOnce(
+    name: string,
+    config: McpServerConfig,
+    options: McpClientOptions,
+    token?: string,
+  ): Promise<McpClient> {
     const timeoutMs = options.timeoutMs ?? 60_000;
     let transport: StdioTransport | HttpTransport | undefined;
     const connection = new JsonRpcConnection(
@@ -124,7 +163,16 @@ export class McpClient {
     };
 
     if ("url" in config) {
-      transport = new HttpTransport({ url: config.url, headers: config.headers }, transportOptions);
+      transport = new HttpTransport(
+        {
+          url: config.url,
+          headers: {
+            ...config.headers,
+            ...(token ? { authorization: `Bearer ${token}` } : {}),
+          },
+        },
+        transportOptions,
+      );
     } else {
       transport = new StdioTransport(
         {

@@ -170,6 +170,10 @@ async function main(): Promise<void> {
   let stream: Stream | undefined;
   let busy = false;
   const approvals = new Map<string, (outcome: AskOutcome) => void>();
+  const planApprovals = new Map<
+    string,
+    (result: { approved: boolean; feedback?: string }) => void
+  >();
 
   const ask = async (request: {
     tool: string;
@@ -195,6 +199,23 @@ async function main(): Promise<void> {
     return outcome;
   };
 
+  const planApprover = async (
+    plan: string,
+  ): Promise<{ approved: boolean; feedback?: string }> => {
+    if (!stream) return { approved: false, feedback: "No active stream." };
+    const id = randomUUID();
+    return new Promise<{ approved: boolean; feedback?: string }>((resolve) => {
+      planApprovals.set(id, resolve);
+      const timer = setTimeout(() => {
+        if (planApprovals.delete(id)) {
+          resolve({ approved: false, feedback: "Plan approval timed out." });
+        }
+      }, 300_000);
+      timer.unref?.();
+      stream?.send("plan_approval", { id, plan });
+    }).finally(() => planApprovals.delete(id));
+  };
+
   const permissions = new PermissionEngine(options.mode, ask);
   const agent = new Agent({
     provider,
@@ -204,6 +225,7 @@ async function main(): Promise<void> {
     session,
     cwd: options.cwd,
     system: `You are a coding agent working in ${options.cwd}. Use absolute paths, read files before editing them, prefer Read/Grep/Glob over shell equivalents, and summarize what you changed when you finish.`,
+    planApprover,
     onEvent: (event: AgentEvent) => {
       if (!stream) return;
       switch (event.type) {
@@ -333,6 +355,26 @@ async function main(): Promise<void> {
             ? decision
             : "deny",
         );
+        json(response, 200, { ok: true });
+        return;
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/approve-plan") {
+        const body = await readJson(request);
+        const id = typeof body.id === "string" ? body.id : "";
+        const resolver = planApprovals.get(id);
+        if (!resolver) {
+          json(response, 404, { error: "Unknown plan approval id." });
+          return;
+        }
+        planApprovals.delete(id);
+        resolver({
+          approved: body.approved === true,
+          feedback:
+            typeof body.feedback === "string"
+              ? body.feedback.slice(0, 2000)
+              : undefined,
+        });
         json(response, 200, { ok: true });
         return;
       }

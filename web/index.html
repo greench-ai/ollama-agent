@@ -162,6 +162,34 @@
       }
       .msg.user .thumbs { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 8px; }
       .msg.user .thumbs img { max-height: 140px; border-radius: 6px; display: block; }
+      .plan {
+        max-width: 900px;
+        width: 100%;
+        margin: 0 auto;
+        border: 1px solid #2f4467;
+        background: #141c2b;
+        border-radius: var(--radius);
+        padding: 12px;
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+      }
+      .plan .title { font-weight: 600; color: var(--accent); }
+      .plan pre {
+        margin: 0;
+        white-space: pre-wrap;
+        word-break: break-word;
+        font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+        color: #c4c9d6;
+        max-height: 320px;
+        overflow: auto;
+      }
+      .plan textarea { width: 100%; min-height: 40px; }
+      .plan .actions { display: flex; gap: 8px; flex-wrap: wrap; }
+      .plan button { cursor: pointer; }
+      .plan button.approve { border-color: #3d5a2a; color: var(--green); }
+      .plan button.reject { border-color: #5a2a33; color: var(--red); }
+      .plan .done { color: var(--muted); font-size: 13px; }
       textarea {
         flex: 1;
         resize: none;

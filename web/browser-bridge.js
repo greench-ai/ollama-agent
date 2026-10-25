@@ -29,6 +29,9 @@
 
     approve: (id, decision) => post("/api/approve", { id, decision }),
 
+    approvePlan: (id, approved, feedback) =>
+      post("/api/approve-plan", { id, approved, feedback }),
+
     async chat(message, images, onEvent) {
       const response = await fetch("/api/chat", {
         method: "POST",

@@ -129,6 +129,48 @@
     scrollIfNearBottom();
   }
 
+  function addPlanApproval(event) {
+    const card = el("div", "plan");
+    card.appendChild(el("div", "title", "Plan approval"));
+    card.appendChild(el("pre", "", event.plan));
+
+    const feedback = el("textarea");
+    feedback.placeholder = "Optional feedback if rejecting";
+    feedback.rows = 2;
+    card.appendChild(feedback);
+
+    const actions = el("div", "actions");
+    const buttons = [];
+    const finish = async (approved) => {
+      buttons.forEach((button) => (button.disabled = true));
+      try {
+        await bridge.approvePlan(
+          event.id,
+          approved,
+          approved ? undefined : feedback.value.trim() || undefined,
+        );
+        card.appendChild(el("span", "done", approved ? "approved" : "rejected"));
+        actions.remove();
+        feedback.disabled = true;
+      } catch {
+        card.appendChild(el("span", "done error", "failed"));
+      }
+    };
+
+    const approve = el("button", "approve", "Approve");
+    approve.type = "button";
+    approve.addEventListener("click", () => finish(true));
+    const reject = el("button", "reject", "Reject");
+    reject.type = "button";
+    reject.addEventListener("click", () => finish(false));
+    buttons.push(approve, reject);
+    actions.append(approve, reject);
+    card.appendChild(actions);
+
+    log.appendChild(card);
+    scrollIfNearBottom();
+  }
+
   async function loadState() {
     const [state, models] = await Promise.all([bridge.getState(), bridge.getModels()]);
     modelSelect.innerHTML = "";
@@ -193,6 +235,9 @@
         break;
       case "approval":
         addApproval(data);
+        break;
+      case "plan_approval":
+        addPlanApproval(data);
         break;
       case "step":
         break;

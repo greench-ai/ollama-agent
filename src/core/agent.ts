@@ -13,7 +13,12 @@ import type {
   TodoItem,
   Usage,
 } from "./types.ts";
-import { PermissionEngine, summarizeToolInput, toolsForMode } from "./permissions.ts";
+import {
+  PermissionEngine,
+  summarizeToolInput,
+  toolsForMode,
+  type PermissionMode,
+} from "./permissions.ts";
 import { compactMessages, estimateMessages } from "./tokens.ts";
 import { Session } from "./session.ts";
 
@@ -60,6 +65,10 @@ export interface AgentOptions {
   /** Nesting depth; subagents start at 1. */
   depth?: number;
   maxDepth?: number;
+  /** Called by ExitPlanMode; the host shows the plan and returns a decision. */
+  planApprover?: (plan: string) => Promise<{ approved: boolean; feedback?: string }>;
+  /** Mode applied when a plan is approved. Defaults to acceptEdits. */
+  planApplyMode?: PermissionMode;
   onEvent?: (event: AgentEvent) => void;
 }
 
@@ -83,6 +92,8 @@ export class Agent {
   signal?: AbortSignal;
   depth: number;
   maxDepth: number;
+  planApprover?: (plan: string) => Promise<{ approved: boolean; feedback?: string }>;
+  planApplyMode: PermissionMode;
   private subagentCounter = 0;
   private onEvent: (event: AgentEvent) => void;
 
@@ -103,6 +114,8 @@ export class Agent {
     this.signal = options.signal;
     this.depth = options.depth ?? 0;
     this.maxDepth = options.maxDepth ?? 1;
+    this.planApprover = options.planApprover;
+    this.planApplyMode = options.planApplyMode ?? "acceptEdits";
     this.onEvent = options.onEvent ?? (() => {});
   }
 
@@ -266,6 +279,7 @@ export class Agent {
       todos: this.todos,
       log: (line) => this.onEvent({ type: "notice", text: line }),
       spawnSubagent: (request) => this.spawnSubagent(request),
+      requestPlanApproval: (plan) => this.requestPlanApproval(plan),
     };
 
     let content: string;
@@ -299,6 +313,26 @@ export class Agent {
       is_error: isError,
       ...(images && images.length > 0 ? { images } : {}),
     };
+  }
+
+  /** Ask the host to approve a plan, then leave plan mode on approval. */
+  private async requestPlanApproval(
+    plan: string,
+  ): Promise<{ approved: boolean; feedback?: string }> {
+    if (!this.planApprover) {
+      return { approved: false, feedback: "Plan approval is not configured." };
+    }
+    const result = await this.planApprover(plan);
+    if (result.approved) {
+      this.permissions.setMode(this.planApplyMode);
+      this.onEvent({
+        type: "notice",
+        text: `plan approved — mode → ${this.permissions.mode}`,
+      });
+    } else {
+      this.onEvent({ type: "notice", text: "plan rejected" });
+    }
+    return result;
   }
 
   /**

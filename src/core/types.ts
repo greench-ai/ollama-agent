@@ -79,6 +79,10 @@ export interface ToolContext {
   log: (line: string) => void;
   /** Provided by the Agent; absent when tools are run standalone. */
   spawnSubagent?: (request: SubagentRequest) => Promise<SubagentResult>;
+  /** Provided by the Agent in plan mode; asks the user to approve a plan. */
+  requestPlanApproval?: (
+    plan: string,
+  ) => Promise<{ approved: boolean; feedback?: string }>;
 }
 
 export type SubagentType = "general-purpose" | "explore" | "plan";

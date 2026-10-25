@@ -29,6 +29,8 @@ export interface McpPromptEntry extends McpPromptInfo {
 export interface McpManagerOptions {
   timeoutMs?: number;
   onLog?: (line: string) => void;
+  /** Injectable for tests; defaults to opening the system browser. */
+  openUrl?: (url: string) => Promise<void>;
 }
 
 function wrapTool(server: string, info: McpToolInfo, manager: McpManager): Tool {
@@ -98,6 +100,7 @@ export class McpManager {
       const client = await McpClient.connect(name, config, {
         timeoutMs: this.options.timeoutMs,
         onLog: (line) => this.options.onLog?.(`[mcp:${name}] ${line}`),
+        openUrl: this.options.openUrl,
       });
       this.clients.set(name, client);
 

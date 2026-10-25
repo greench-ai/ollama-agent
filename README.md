@@ -40,7 +40,7 @@ Environment variables: `OLLAMA_HOST`, `OLLAMA_API_KEY`, `OLLAMA_MODEL`.
 /think [on|off]            toggle reasoning stream
 /image <path>              attach an image to the next message
 /images                    list staged images
-/mcp [reconnect <server>]  list MCP servers, or reconnect one
+/mcp [reconnect <server>]  /mcp logout <server>
 /resources                 list MCP resources
 /resource <server> <uri>   read an MCP resource
 /prompts                   list MCP prompts
@@ -83,6 +83,19 @@ image attached: screenshot.png (image/png, ~240 KB) · 1 staged
 › What is wrong with this UI?
 ```
 
+## Plan mode
+
+`--mode plan` (or `/mode plan`) exposes read-only tools plus `ExitPlanMode`. The
+model investigates, then calls `ExitPlanMode` with a plan. The host shows it:
+
+- **CLI** — inline approve/deny prompt with optional feedback on rejection
+- **Web / Electron** — plan card with Approve / Reject and a feedback field
+- **HTTP** — SSE `plan_approval`; answer with `POST /api/approve-plan`
+
+On approval the session switches to `acceptEdits` (configurable via
+`planApplyMode`) and the next model turn can edit. On rejection the feedback is
+returned as the tool result so the model can revise.
+
 ## Subagents
 
 The `Task` tool launches a child agent with its own context, session file, and
@@ -120,7 +133,15 @@ and `--no-mcp` to disable MCP entirely.
     "remote": {
       "type": "http",
       "url": "https://example.com/mcp",
-      "headers": { "authorization": "Bearer ${MCP_TOKEN}" }
+      "headers": { "authorization": "Bearer ${MCP_TOKEN}" },
+      "auth": {
+        "authorizationUrl": "https://auth.example.com/authorize",
+        "tokenUrl": "https://auth.example.com/token",
+        "clientId": "${MCP_CLIENT_ID}",
+        "clientSecret": "${MCP_CLIENT_SECRET}",
+        "scopes": ["mcp.read"],
+        "redirectPort": 4318
+      }
     }
   }
 }
@@ -130,8 +151,17 @@ and `--no-mcp` to disable MCP entirely.
 - `${VAR}` and `${VAR:-default}` are expanded in command, args, env, url, and headers.
 - Tools are exposed as `<server>__<tool>` (Claude Code's convention). MCP
   `readOnlyHint: true` tools run without approval; everything else prompts.
-- `/mcp` lists connected servers, their origin, and tool counts.
+- `/mcp` lists connected servers, their origin, and tool counts. Use
+  `/mcp reconnect <server>` to re-establish one, and `/mcp logout <server>` to
+  clear its stored OAuth token.
 - `OLLAMA_AGENT_MCP_LOG=1` echoes server stderr for debugging.
+- **OAuth**: when `auth` is present the client runs authorization-code + PKCE in
+  the system browser, with a loopback redirect on `127.0.0.1:<redirectPort>`
+  (default 4318). Tokens are stored per server in
+  `~/.local/share/ollama-agent/mcp-auth.json` (mode 0600), refreshed on expiry,
+  and re-obtained once if the server answers 401. `auth` wins over a static
+  `authorization` header. Dynamic client registration and discovery are not
+  implemented — configure the endpoints and `clientId` yourself.
 
 ## Web UI
 
@@ -155,13 +185,14 @@ HTTP API:
 | POST | `/api/state` | change `model` and/or `mode` |
 | POST | `/api/chat` | run a turn; body `{message, images?}`; streams SSE events |
 | POST | `/api/approve` | answer an `approval` event (`id`, `decision`) |
+| POST | `/api/approve-plan` | answer a `plan_approval` event (`id`, `approved`, `feedback?`) |
 | POST | `/api/reset` | clear the conversation |
 
 SSE events: `start`, `thinking`, `text`, `tool_start`, `tool_end`, `notice`,
-`subagent_start`, `subagent_end`, `error`, `approval`, `step`, `done` (with
-`used`/`budget`). The bundled web client (`web/index.html`) renders streaming
-text, thinking, tool cards, subagent progress, and approval prompts. It is
-deliberately plain — the shell comes later.
+`subagent_start`, `subagent_end`, `error`, `approval`, `plan_approval`, `step`,
+`done` (with `used`/`budget`). The bundled web client (`web/index.html`) renders
+streaming text, thinking, tool cards, subagent progress, attachment previews,
+and approval prompts. It is deliberately plain — the shell comes later.
 
 ## Desktop shell (Electron)
 
@@ -255,8 +286,9 @@ electron-builder creates a draft release by default; publish it in the GitHub UI
 Early. Implemented: streaming, tool loop, permissions, sessions, 8 built-in
 tools (including `Task` subagents with isolated context), image input (user
 attachments, Read on images, MCP image results), an MCP client (stdio +
-Streamable HTTP; tools, resources, prompts, pagination, annotations, reconnect),
-a local HTTP/SSE server with a web client, an Electron shell with a sandboxed
-renderer, IPC approvals, CSP, window-state persistence, menus, Linux packaging
-(AppImage + deb), and electron-updater wiring. Not yet: OAuth for HTTP MCP
-servers and the plan-mode propose/apply workflow.
+Streamable HTTP; tools, resources, prompts, pagination, annotations, reconnect,
+OAuth authorization-code + PKCE), a local HTTP/SSE server with a web client, an
+Electron shell with a sandboxed renderer, IPC approvals, plan-mode
+propose/approve/apply, CSP, window-state persistence, menus, Linux packaging
+(AppImage + deb), and electron-updater wiring. Not yet: Windows/macOS packaging
+and MCP dynamic client registration/discovery.
