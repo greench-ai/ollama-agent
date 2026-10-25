@@ -59,7 +59,7 @@ export async function listSessions(limit = 200): Promise<SessionSummary[]> {
       try {
         const info = await stat(file);
         // A session containing only its meta line has no conversation yet.
-        if (!titles[id] && info.size <= 300) return undefined;
+        if (!titles[id] && info.size <= 200) return undefined;
         const metaLine = await readFirstLine(file);
         let meta: Record<string, unknown> = {};
         if (metaLine) {
