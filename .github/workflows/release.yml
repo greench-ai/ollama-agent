@@ -80,4 +80,5 @@ jobs:
         run: |
           gh release view "$TAG" >/dev/null 2>&1 || \
             gh release create "$TAG" --title "$TAG" --generate-notes
-          find dist -type f -print0 | xargs -0 -r gh release upload "$TAG" --clobber
+          find dist -type f ! -name builder-debug.yml -print0 | \
+            xargs -0 -r gh release upload "$TAG" --clobber
