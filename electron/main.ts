@@ -22,8 +22,16 @@ import {
   loadSession,
   renameSession,
 } from "../src/core/sessions.ts";
-import { loadMcpConfig } from "../src/mcp/config.ts";
+import { loadSettings, updateSettings, type AppSettings } from "../src/core/settings.ts";
+import { loadMcpConfig, type McpServerConfig } from "../src/mcp/config.ts";
+import {
+  defaultMcpConfigPath,
+  readMcpConfigFile,
+  removeMcpServer,
+  saveMcpServer,
+} from "../src/mcp/config-editor.ts";
 import { McpManager } from "../src/mcp/manager.ts";
+import { clearToken } from "../src/mcp/oauth.ts";
 import { allTools } from "../src/tools/index.ts";
 
 interface Options {
@@ -32,6 +40,7 @@ interface Options {
   model?: string;
   cwd: string;
   mode: PermissionMode;
+  modeProvided: boolean;
   mcpConfig?: string;
   noMcp: boolean;
   devtools: boolean;
@@ -41,6 +50,7 @@ function parseOptions(argv: string[]): Options {
   const options: Options = {
     cwd: process.cwd(),
     mode: "default",
+    modeProvided: false,
     noMcp: false,
     devtools: Boolean(process.env.AGENT_DEVTOOLS),
   };
@@ -66,7 +76,10 @@ function parseOptions(argv: string[]): Options {
         break;
       case "--mode": {
         const value = take(index) as PermissionMode;
-        if (PERMISSION_MODES.includes(value)) options.mode = value;
+        if (PERMISSION_MODES.includes(value)) {
+          options.mode = value;
+          options.modeProvided = true;
+        }
         index += 1;
         break;
       }
@@ -92,6 +105,8 @@ let provider: OllamaProvider;
 let agent: Agent;
 let permissions: PermissionEngine;
 let session: Session;
+let settings: AppSettings;
+let mcpConfigPath: string;
 let mcp: McpManager | undefined;
 let busy = false;
 let currentRun: AbortController | null = null;
@@ -160,7 +175,46 @@ function statePayload() {
     mcp: mcp?.servers ?? [],
     resources: mcp?.resources ?? [],
     prompts: mcp?.prompts ?? [],
+    settings: {
+      theme: settings.theme,
+      showThinking: settings.showThinking,
+      model: settings.model,
+      mode: settings.mode,
+    },
+    mcpPath: mcpConfigPath,
   };
+}
+
+async function mcpListPayload() {
+  let configs: Record<string, unknown> = {};
+  let error: string | undefined;
+  try {
+    const file = await readMcpConfigFile(mcpConfigPath);
+    configs = file.raw.mcpServers;
+  } catch (caught) {
+    error = caught instanceof Error ? caught.message : String(caught);
+  }
+  return {
+    path: mcpConfigPath,
+    servers: mcp?.servers ?? [],
+    configs,
+    error,
+  };
+}
+
+async function applyMcpServers(
+  servers: Record<string, McpServerConfig>,
+): Promise<void> {
+  await mcp?.close();
+  mcp =
+    Object.keys(servers).length > 0
+      ? await McpManager.start(servers, {
+          onLog: (line) => {
+            if (process.env.OLLAMA_AGENT_MCP_LOG) console.error(line);
+          },
+        })
+      : undefined;
+  agent.tools = [...allTools, ...(mcp?.tools ?? [])];
 }
 
 function forwardAgentEvent(event: AgentEvent): void {
@@ -220,6 +274,7 @@ function forwardAgentEvent(event: AgentEvent): void {
 }
 
 async function initCore(): Promise<void> {
+  settings = await loadSettings();
   provider = new OllamaProvider({
     host: options.host ?? process.env.OLLAMA_HOST ?? "http://127.0.0.1:11434",
     apiKey: options.apiKey ?? process.env.OLLAMA_API_KEY,
@@ -231,13 +286,16 @@ async function initCore(): Promise<void> {
   } catch (error) {
     console.error(`[electron] Ollama unavailable: ${error instanceof Error ? error.message : error}`);
   }
-  const model = options.model ?? process.env.OLLAMA_MODEL ?? models[0]?.name ?? "";
+  const model =
+    options.model ?? process.env.OLLAMA_MODEL ?? settings.model ?? models[0]?.name ?? "";
 
   session = await Session.create({ cwd: options.cwd, model });
 
+  mcpConfigPath = defaultMcpConfigPath();
   if (!options.noMcp) {
     try {
       const config = await loadMcpConfig(options.mcpConfig, options.cwd);
+      if (config.path) mcpConfigPath = config.path;
       if (Object.keys(config.servers).length > 0) {
         mcp = await McpManager.start(config.servers, {
           onLog: (line) => {
@@ -252,7 +310,10 @@ async function initCore(): Promise<void> {
     }
   }
 
-  permissions = new PermissionEngine(options.mode, ask);
+  permissions = new PermissionEngine(
+    options.modeProvided ? options.mode : settings.mode,
+    ask,
+  );
   agent = new Agent({
     provider,
     model,
@@ -414,6 +475,60 @@ function registerIpc(): void {
       agent.restore(next, []);
     }
     return statePayload();
+  });
+
+  ipcMain.handle("settings:get", () => settings);
+
+  ipcMain.handle("settings:update", async (_event, payload: unknown) => {
+    const body = asRecord(payload);
+    const patch: Partial<AppSettings> = {};
+    if (body.theme === "system" || body.theme === "light" || body.theme === "dark") {
+      patch.theme = body.theme;
+    }
+    if (typeof body.model === "string") patch.model = body.model;
+    if (typeof body.mode === "string") patch.mode = body.mode as PermissionMode;
+    if (typeof body.showThinking === "boolean") patch.showThinking = body.showThinking;
+    settings = await updateSettings(patch);
+    return settings;
+  });
+
+  ipcMain.handle("mcp:list", () => mcpListPayload());
+
+  ipcMain.handle("mcp:save", async (_event, payload: unknown) => {
+    if (busy) throw new Error("Stop the current turn before changing connectors.");
+    if (options.noMcp) throw new Error("MCP is disabled (--no-mcp).");
+    const body = asRecord(payload);
+    const name = typeof body.name === "string" ? body.name.trim() : "";
+    if (!name) throw new Error("Connector name is required.");
+    const file = await saveMcpServer(mcpConfigPath, name, body.config);
+    await applyMcpServers(file.servers);
+    return mcpListPayload();
+  });
+
+  ipcMain.handle("mcp:remove", async (_event, payload: unknown) => {
+    if (busy) throw new Error("Stop the current turn before changing connectors.");
+    if (options.noMcp) throw new Error("MCP is disabled (--no-mcp).");
+    const name = asRecord(payload).name;
+    if (typeof name !== "string" || !name) throw new Error("Missing connector name.");
+    const file = await removeMcpServer(mcpConfigPath, name);
+    await clearToken(name).catch(() => {});
+    await applyMcpServers(file.servers);
+    return mcpListPayload();
+  });
+
+  ipcMain.handle("mcp:reconnect", async (_event, payload: unknown) => {
+    if (busy) throw new Error("Stop the current turn before reconnecting.");
+    if (!mcp) return mcpListPayload();
+    const name = asRecord(payload).name;
+    await mcp.reconnect(typeof name === "string" && name ? name : undefined);
+    return mcpListPayload();
+  });
+
+  ipcMain.handle("mcp:logout", async (_event, payload: unknown) => {
+    const name = asRecord(payload).name;
+    if (typeof name !== "string" || !name) throw new Error("Missing connector name.");
+    await clearToken(name);
+    return mcpListPayload();
   });
 }
 
@@ -643,6 +758,14 @@ async function createWindow(): Promise<void> {
             `);
             console.log("[electron] ui chat:", chat);
           }
+        }
+        if (process.env.AGENT_SMOKE_MODAL) {
+          await mainWindow?.webContents.executeJavaScript(`
+            document.getElementById("settings-btn").click();
+            const tab = document.querySelector('.tab[data-tab="${process.env.AGENT_SMOKE_MODAL}"]');
+            if (tab) tab.click();
+          `);
+          await new Promise((resolve) => setTimeout(resolve, 900));
         }
         if (process.env.AGENT_SMOKE_SCREENSHOT) {
           await new Promise((resolve) => setTimeout(resolve, 1200));

@@ -34,6 +34,27 @@ const bridge = {
 
   deleteSession: (id: string) => ipcRenderer.invoke("sessions:delete", { id }),
 
+  getSettings: () => ipcRenderer.invoke("settings:get"),
+
+  updateSettings: (patch: {
+    theme?: string;
+    model?: string;
+    mode?: string;
+    showThinking?: boolean;
+  }) => ipcRenderer.invoke("settings:update", patch),
+
+  mcpList: () => ipcRenderer.invoke("mcp:list"),
+
+  mcpSave: (name: string, config: unknown) =>
+    ipcRenderer.invoke("mcp:save", { name, config }),
+
+  mcpRemove: (name: string) => ipcRenderer.invoke("mcp:remove", { name }),
+
+  mcpReconnect: (name?: string) =>
+    ipcRenderer.invoke("mcp:reconnect", { name }),
+
+  mcpLogout: (name: string) => ipcRenderer.invoke("mcp:logout", { name }),
+
   chat: async (
     message: string,
     images: Array<{ data: string; mimeType: string; name?: string }>,

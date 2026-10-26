@@ -44,6 +44,20 @@
 
     deleteSession: (id) => post("/api/sessions/delete", { id }),
 
+    getSettings: () => fetch("/api/settings").then((response) => response.json()),
+
+    updateSettings: (patch) => post("/api/settings", patch),
+
+    mcpList: () => fetch("/api/mcp").then((response) => response.json()),
+
+    mcpSave: (name, config) => post("/api/mcp/save", { name, config }),
+
+    mcpRemove: (name) => post("/api/mcp/remove", { name }),
+
+    mcpReconnect: (name) => post("/api/mcp/reconnect", { name }),
+
+    mcpLogout: (name) => post("/api/mcp/logout", { name }),
+
     async chat(message, images, onEvent) {
       const response = await fetch("/api/chat", {
         method: "POST",

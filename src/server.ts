@@ -21,7 +21,15 @@ import {
   loadSession,
   renameSession,
 } from "./core/sessions.ts";
-import { loadMcpConfig } from "./mcp/config.ts";
+import { loadSettings, updateSettings, type AppSettings } from "./core/settings.ts";
+import { loadMcpConfig, type McpServerConfig } from "./mcp/config.ts";
+import {
+  defaultMcpConfigPath,
+  readMcpConfigFile,
+  removeMcpServer,
+  saveMcpServer,
+} from "./mcp/config-editor.ts";
+import { clearToken } from "./mcp/oauth.ts";
 import { McpManager } from "./mcp/manager.ts";
 import { allTools } from "./tools/index.ts";
 
@@ -33,6 +41,7 @@ interface ServerOptions {
   model?: string;
   cwd: string;
   mode: PermissionMode;
+  modeProvided: boolean;
   mcpConfig?: string;
   noMcp: boolean;
 }
@@ -43,6 +52,7 @@ function parseOptions(argv: string[]): ServerOptions {
     bind: "127.0.0.1",
     cwd: process.cwd(),
     mode: "default",
+    modeProvided: false,
     noMcp: false,
   };
   const take = (index: number, flag: string): string => {
@@ -84,6 +94,7 @@ function parseOptions(argv: string[]): ServerOptions {
           throw new Error(`Unknown mode "${value}".`);
         }
         options.mode = value;
+        options.modeProvided = true;
         index += 1;
         break;
       }
@@ -148,18 +159,22 @@ async function main(): Promise<void> {
     apiKey: options.apiKey ?? process.env.OLLAMA_API_KEY,
   });
 
+  let settings = await loadSettings();
   const models = await provider.listModels();
-  let model = options.model ?? process.env.OLLAMA_MODEL ?? models[0]?.name;
+  let model =
+    options.model ?? process.env.OLLAMA_MODEL ?? settings.model ?? models[0]?.name;
   if (!model) {
     console.error("No models found. Pull one first, e.g. ollama pull qwen3:8b");
     process.exit(1);
   }
 
   const session = await Session.create({ cwd: options.cwd, model });
+  let mcpConfigPath = defaultMcpConfigPath();
   let mcp: McpManager | undefined;
   if (!options.noMcp) {
     try {
       const config = await loadMcpConfig(options.mcpConfig, options.cwd);
+      if (config.path) mcpConfigPath = config.path;
       if (Object.keys(config.servers).length > 0) {
         mcp = await McpManager.start(config.servers, {
           onLog: (line) => {
@@ -223,7 +238,10 @@ async function main(): Promise<void> {
     }).finally(() => planApprovals.delete(id));
   };
 
-  const permissions = new PermissionEngine(options.mode, ask);
+  const permissions = new PermissionEngine(
+    options.modeProvided ? options.mode : settings.mode,
+    ask,
+  );
   const agent = new Agent({
     provider,
     model,
@@ -299,7 +317,46 @@ async function main(): Promise<void> {
     mcp: mcp?.servers ?? [],
     resources: mcp?.resources ?? [],
     prompts: mcp?.prompts ?? [],
+    settings: {
+      theme: settings.theme,
+      showThinking: settings.showThinking,
+      model: settings.model,
+      mode: settings.mode,
+    },
+    mcpPath: mcpConfigPath,
   });
+
+  const mcpListPayload = async () => {
+    let configs: Record<string, unknown> = {};
+    let error: string | undefined;
+    try {
+      const file = await readMcpConfigFile(mcpConfigPath);
+      configs = file.raw.mcpServers;
+    } catch (caught) {
+      error = caught instanceof Error ? caught.message : String(caught);
+    }
+    return {
+      path: mcpConfigPath,
+      servers: mcp?.servers ?? [],
+      configs,
+      error,
+    };
+  };
+
+  const applyMcpServers = async (
+    servers: Record<string, McpServerConfig>,
+  ): Promise<void> => {
+    await mcp?.close();
+    mcp =
+      Object.keys(servers).length > 0
+        ? await McpManager.start(servers, {
+            onLog: (line) => {
+              if (process.env.OLLAMA_AGENT_MCP_LOG) console.error(line);
+            },
+          })
+        : undefined;
+    agent.tools = [...allTools, ...(mcp?.tools ?? [])];
+  };
 
   const here = path.dirname(fileURLToPath(import.meta.url));
   const webDir = path.join(here, "..", "web");
@@ -328,6 +385,97 @@ async function main(): Promise<void> {
 
       if (request.method === "GET" && url.pathname === "/api/state") {
         json(response, 200, statePayload());
+        return;
+      }
+
+      if (request.method === "GET" && url.pathname === "/api/settings") {
+        json(response, 200, settings);
+        return;
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/settings") {
+        const body = await readJson(request);
+        const patch: Partial<AppSettings> = {};
+        if (body.theme === "system" || body.theme === "light" || body.theme === "dark") {
+          patch.theme = body.theme;
+        }
+        if (typeof body.model === "string") patch.model = body.model;
+        if (typeof body.mode === "string") patch.mode = body.mode as PermissionMode;
+        if (typeof body.showThinking === "boolean") patch.showThinking = body.showThinking;
+        settings = await updateSettings(patch);
+        json(response, 200, settings);
+        return;
+      }
+
+      if (request.method === "GET" && url.pathname === "/api/mcp") {
+        json(response, 200, await mcpListPayload());
+        return;
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/mcp/save") {
+        if (busy) {
+          json(response, 409, { error: "Stop the current turn first." });
+          return;
+        }
+        if (options.noMcp) {
+          json(response, 400, { error: "MCP is disabled (--no-mcp)." });
+          return;
+        }
+        const body = await readJson(request);
+        const name = typeof body.name === "string" ? body.name.trim() : "";
+        if (!name) {
+          json(response, 400, { error: "Connector name is required." });
+          return;
+        }
+        const file = await saveMcpServer(mcpConfigPath, name, body.config);
+        await applyMcpServers(file.servers);
+        json(response, 200, await mcpListPayload());
+        return;
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/mcp/remove") {
+        if (busy) {
+          json(response, 409, { error: "Stop the current turn first." });
+          return;
+        }
+        if (options.noMcp) {
+          json(response, 400, { error: "MCP is disabled (--no-mcp)." });
+          return;
+        }
+        const body = await readJson(request);
+        const name = typeof body.name === "string" ? body.name : "";
+        if (!name) {
+          json(response, 400, { error: "Missing connector name." });
+          return;
+        }
+        const file = await removeMcpServer(mcpConfigPath, name);
+        await clearToken(name).catch(() => {});
+        await applyMcpServers(file.servers);
+        json(response, 200, await mcpListPayload());
+        return;
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/mcp/reconnect") {
+        if (busy) {
+          json(response, 409, { error: "Stop the current turn first." });
+          return;
+        }
+        const body = await readJson(request);
+        const name = typeof body.name === "string" && body.name ? body.name : undefined;
+        await mcp?.reconnect(name);
+        json(response, 200, await mcpListPayload());
+        return;
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/mcp/logout") {
+        const body = await readJson(request);
+        const name = typeof body.name === "string" ? body.name : "";
+        if (!name) {
+          json(response, 400, { error: "Missing connector name." });
+          return;
+        }
+        await clearToken(name);
+        json(response, 200, await mcpListPayload());
         return;
       }
 

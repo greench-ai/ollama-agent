@@ -509,6 +509,146 @@
         font-size: 12px;
       }
 
+      /* Settings modal */
+      .modal {
+        position: fixed;
+        inset: 0;
+        z-index: 50;
+        background: rgba(0, 0, 0, 0.5);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 20px;
+      }
+      .modal[hidden] { display: none; }
+      .modal-card {
+        width: min(780px, 100%);
+        max-height: 86vh;
+        background: var(--bg-elevated);
+        border: 1px solid var(--border);
+        border-radius: 16px;
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+        box-shadow: 0 24px 70px rgba(0, 0, 0, 0.45);
+      }
+      .modal-head {
+        display: flex;
+        align-items: center;
+        padding: 14px 16px;
+        border-bottom: 1px solid var(--border);
+      }
+      .modal-title { font-weight: 700; }
+      .tabs {
+        display: flex;
+        gap: 4px;
+        padding: 8px 12px;
+        border-bottom: 1px solid var(--border);
+      }
+      .tab {
+        background: transparent;
+        border: 1px solid transparent;
+        color: var(--muted);
+        border-radius: 8px;
+        padding: 6px 12px;
+      }
+      .tab:hover { color: var(--text); }
+      .tab.active {
+        background: var(--surface);
+        color: var(--text);
+        border-color: var(--border);
+      }
+      .tab-panels {
+        overflow-y: auto;
+        padding: 16px;
+        display: flex;
+        flex-direction: column;
+        gap: 14px;
+      }
+      .tab-panels[hidden] { display: none; }
+      .field { display: flex; flex-direction: column; gap: 6px; font-size: 13px; }
+      .field > span { color: var(--muted); }
+      .field input, .field select, .field textarea {
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        padding: 8px 10px;
+        width: 100%;
+      }
+      .field textarea {
+        resize: vertical;
+        min-height: 60px;
+        font: 12.5px/1.5 var(--mono);
+      }
+      .field.checkbox { flex-direction: row; align-items: center; gap: 8px; }
+      .field.checkbox input { width: auto; }
+      .hint { color: var(--muted); font-size: 12.5px; word-break: break-word; }
+      .modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 4px; }
+      .modal-actions button {
+        background: var(--surface-2);
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        padding: 7px 14px;
+      }
+      .modal-actions button.send {
+        background: var(--accent);
+        color: var(--accent-ink);
+        border-color: transparent;
+      }
+      .mcp-list { display: flex; flex-direction: column; gap: 8px; }
+      .connector {
+        border: 1px solid var(--border);
+        background: var(--surface);
+        border-radius: 10px;
+        padding: 10px 12px;
+        display: flex;
+        gap: 10px;
+        align-items: flex-start;
+        flex-wrap: wrap;
+      }
+      .connector-main { flex: 1; min-width: 180px; display: flex; flex-direction: column; gap: 2px; }
+      .connector-name { font-weight: 600; display: flex; gap: 8px; align-items: center; }
+      .badge {
+        font-size: 11px;
+        border-radius: 999px;
+        padding: 1px 8px;
+        border: 1px solid var(--border);
+        color: var(--muted);
+      }
+      .badge.ok { color: var(--green); border-color: color-mix(in srgb, var(--green) 40%, var(--border)); }
+      .badge.bad { color: var(--red); border-color: color-mix(in srgb, var(--red) 40%, var(--border)); }
+      .connector-sub {
+        font-size: 12px;
+        color: var(--muted);
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        max-width: 100%;
+      }
+      .connector-error { font-size: 12px; color: var(--red); word-break: break-word; }
+      .connector-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+      .connector-actions button {
+        background: transparent;
+        border: 1px solid var(--border);
+        border-radius: 7px;
+        padding: 4px 9px;
+        font-size: 12px;
+        color: var(--muted);
+      }
+      .connector-actions button:hover { color: var(--text); border-color: var(--accent); }
+      .mcp-form {
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        padding: 12px;
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+        background: var(--surface);
+      }
+      .mcp-form[hidden] { display: none; }
+      .mcp-section { display: flex; flex-direction: column; gap: 10px; }
+      .mcp-section[hidden] { display: none; }
+
       @media (max-width: 760px) {
         .sidebar {
           position: fixed;
@@ -533,6 +673,7 @@
       <input class="search" id="search" type="search" placeholder="Search chats" />
       <nav class="chats" id="chats"></nav>
       <div class="side-foot">
+        <button class="theme" id="settings-btn">Settings</button>
         <button class="theme" id="theme">Theme: system</button>
         <div class="mcp-status" id="mcp"></div>
       </div>
@@ -580,6 +721,158 @@
         </div>
       </form>
     </main>
+
+    <div class="modal" id="modal" hidden>
+      <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+        <div class="modal-head">
+          <div class="modal-title" id="modal-title">Settings</div>
+          <div class="spacer"></div>
+          <button class="icon" id="modal-close" title="Close">×</button>
+        </div>
+        <div class="tabs">
+          <button class="tab active" data-tab="general" type="button">General</button>
+          <button class="tab" data-tab="connectors" type="button">Connectors</button>
+          <button class="tab" data-tab="about" type="button">About</button>
+        </div>
+
+        <div class="tab-panels" data-panel="general">
+          <label class="field">
+            <span>Theme</span>
+            <select id="set-theme">
+              <option value="system">System</option>
+              <option value="light">Light</option>
+              <option value="dark">Dark</option>
+            </select>
+          </label>
+          <label class="field">
+            <span>Default model</span>
+            <select id="set-model"></select>
+          </label>
+          <label class="field">
+            <span>Default permission mode</span>
+            <select id="set-mode">
+              <option value="default">default</option>
+              <option value="acceptEdits">acceptEdits</option>
+              <option value="plan">plan</option>
+              <option value="bypassPermissions">bypassPermissions</option>
+            </select>
+          </label>
+          <label class="field checkbox">
+            <input type="checkbox" id="set-thinking" />
+            Show reasoning in conversations
+          </label>
+          <div class="hint">
+            Defaults apply at app startup and to new sessions. The header pickers
+            change only the current session.
+          </div>
+          <div class="notice error" id="settings-error" hidden></div>
+          <div class="modal-actions">
+            <button id="settings-save" class="send" type="button">Save</button>
+          </div>
+        </div>
+
+        <div class="tab-panels" data-panel="connectors" hidden>
+          <div class="hint" id="mcp-path">Loading connectors…</div>
+          <div class="mcp-list" id="mcp-list"></div>
+          <button class="new-chat" id="mcp-add" type="button">
+            <span class="plus">+</span> Add connector
+          </button>
+          <form class="mcp-form" id="mcp-form" hidden>
+            <label class="field">
+              <span>Name</span>
+              <input id="mcp-name" placeholder="filesystem" required />
+            </label>
+            <label class="field">
+              <span>Transport</span>
+              <select id="mcp-transport">
+                <option value="stdio">stdio (local command)</option>
+                <option value="http">http (remote)</option>
+              </select>
+            </label>
+
+            <div class="mcp-section" data-transport="stdio">
+              <label class="field">
+                <span>Command</span>
+                <input id="mcp-command" placeholder="npx" />
+              </label>
+              <label class="field">
+                <span>Arguments (one per line)</span>
+                <textarea id="mcp-args" rows="3" placeholder="-y&#10;@modelcontextprotocol/server-filesystem&#10;/path"></textarea>
+              </label>
+              <label class="field">
+                <span>Environment (KEY=VALUE per line)</span>
+                <textarea id="mcp-env" rows="2"></textarea>
+              </label>
+              <label class="field">
+                <span>Working directory (optional)</span>
+                <input id="mcp-cwd" />
+              </label>
+            </div>
+
+            <div class="mcp-section" data-transport="http" hidden>
+              <label class="field">
+                <span>URL</span>
+                <input id="mcp-url" placeholder="https://example.com/mcp" />
+              </label>
+              <label class="field">
+                <span>Headers (KEY=VALUE per line)</span>
+                <textarea id="mcp-headers" rows="2"></textarea>
+              </label>
+              <label class="field">
+                <span>OAuth</span>
+                <select id="mcp-auth">
+                  <option value="none">None</option>
+                  <option value="discover">Discover automatically</option>
+                  <option value="explicit">Explicit endpoints</option>
+                </select>
+              </label>
+              <div class="mcp-section" id="mcp-auth-explicit" hidden>
+                <label class="field">
+                  <span>Authorization URL</span>
+                  <input id="mcp-auth-url" />
+                </label>
+                <label class="field">
+                  <span>Token URL</span>
+                  <input id="mcp-token-url" />
+                </label>
+                <label class="field">
+                  <span>Client ID</span>
+                  <input id="mcp-client-id" />
+                </label>
+                <label class="field">
+                  <span>Client secret (optional)</span>
+                  <input id="mcp-client-secret" />
+                </label>
+                <label class="field">
+                  <span>Scopes (space separated)</span>
+                  <input id="mcp-scopes" />
+                </label>
+                <label class="field">
+                  <span>Redirect port</span>
+                  <input id="mcp-redirect-port" type="number" placeholder="4318" />
+                </label>
+              </div>
+            </div>
+
+            <div class="notice error" id="mcp-error" hidden></div>
+            <div class="modal-actions">
+              <button type="button" id="mcp-cancel">Cancel</button>
+              <button type="submit" class="send" id="mcp-save">Save connector</button>
+            </div>
+          </form>
+        </div>
+
+        <div class="tab-panels" data-panel="about" hidden>
+          <p>
+            <strong>ollama-agent</strong> — an agentic coding client for Ollama
+            local and cloud models.
+          </p>
+          <div class="hint">Working directory: <span id="about-cwd"></span></div>
+          <div class="hint">Session: <span id="about-session"></span></div>
+          <div class="hint">Connector config: <span id="about-mcp"></span></div>
+        </div>
+      </div>
+    </div>
 
     <input
       type="file"

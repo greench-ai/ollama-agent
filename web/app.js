@@ -24,6 +24,42 @@
   const collapseBtn = $("collapse");
   const expandBtn = $("expand");
   const newChatBtn = $("new-chat");
+  const settingsBtn = $("settings-btn");
+
+  const modal = $("modal");
+  const modalClose = $("modal-close");
+  const settingTheme = $("set-theme");
+  const settingModel = $("set-model");
+  const settingMode = $("set-mode");
+  const settingThinking = $("set-thinking");
+  const settingsSave = $("settings-save");
+  const settingsError = $("settings-error");
+  const mcpPathEl = $("mcp-path");
+  const mcpListEl = $("mcp-list");
+  const mcpAdd = $("mcp-add");
+  const mcpForm = $("mcp-form");
+  const mcpName = $("mcp-name");
+  const mcpTransport = $("mcp-transport");
+  const mcpCommand = $("mcp-command");
+  const mcpArgs = $("mcp-args");
+  const mcpEnv = $("mcp-env");
+  const mcpCwd = $("mcp-cwd");
+  const mcpUrl = $("mcp-url");
+  const mcpHeaders = $("mcp-headers");
+  const mcpAuth = $("mcp-auth");
+  const mcpAuthExplicit = $("mcp-auth-explicit");
+  const mcpAuthUrl = $("mcp-auth-url");
+  const mcpTokenUrl = $("mcp-token-url");
+  const mcpClientId = $("mcp-client-id");
+  const mcpClientSecret = $("mcp-client-secret");
+  const mcpScopes = $("mcp-scopes");
+  const mcpRedirectPort = $("mcp-redirect-port");
+  const mcpError = $("mcp-error");
+  const mcpSave = $("mcp-save");
+  const mcpCancel = $("mcp-cancel");
+  const aboutCwd = $("about-cwd");
+  const aboutSession = $("about-session");
+  const aboutMcp = $("about-mcp");
 
   if (!bridge) {
     thread.appendChild(
@@ -55,10 +91,16 @@
     title: "New chat",
     running: false,
     sessions: [],
+    models: [],
     model: "",
     mode: "default",
     stagedImages: [],
     theme: "system",
+    settings: { theme: "system", showThinking: true, model: "", mode: "default" },
+    cwd: "",
+    sessionFile: "",
+    mcpPath: "",
+    mcpData: { path: "", servers: [], configs: {} },
   };
 
   let current = null;
@@ -167,8 +209,9 @@
 
   const THEMES = ["system", "light", "dark"];
 
-  function applyTheme(theme) {
+  function applyTheme(theme, persist = true) {
     state.theme = THEMES.includes(theme) ? theme : "system";
+    state.settings.theme = state.theme;
     document.documentElement.dataset.theme = state.theme;
     themeBtn.textContent = `Theme: ${state.theme}`;
     try {
@@ -176,12 +219,15 @@
     } catch {
       // private mode / blocked storage
     }
+    if (persist && bridge && bridge.updateSettings) {
+      bridge.updateSettings({ theme: state.theme }).catch(() => {});
+    }
   }
 
-  applyTheme(localStorage.getItem("ollama-agent-theme") || "system");
+  applyTheme(localStorage.getItem("ollama-agent-theme") || "system", false);
   themeBtn.addEventListener("click", () => {
     const index = THEMES.indexOf(state.theme);
-    applyTheme(THEMES[(index + 1) % THEMES.length]);
+    applyTheme(THEMES[(index + 1) % THEMES.length], true);
   });
 
   function setCollapsed(collapsed) {
@@ -226,6 +272,7 @@
   }
 
   function addThinking(parent) {
+    if (!state.settings.showThinking) return null;
     const details = el("details", "thinking");
     details.appendChild(el("summary", "", "Thinking"));
     const pre = el("pre");
@@ -379,7 +426,8 @@
       for (const block of blocks) {
         if (block.type === "thinking") {
           flush();
-          addThinking(wrap).textContent = block.thinking;
+          const pre = addThinking(wrap);
+          if (pre) pre.textContent = block.thinking;
         } else if (block.type === "text") {
           buffer += block.text;
         } else if (block.type === "tool_use") {
@@ -445,8 +493,9 @@
         break;
       case "thinking":
         if (!current) startAssistant();
+        if (!state.settings.showThinking) break;
         if (!current.thinking) current.thinking = addThinking(current.wrap);
-        current.thinking.textContent += data.text || "";
+        if (current.thinking) current.thinking.textContent += data.text || "";
         break;
       case "tool_start":
         if (!current) startAssistant();
@@ -868,8 +917,15 @@
       modeSelect.value = data.mode;
     }
     if (data.session) {
+      state.sessionFile = data.session;
       state.sessionId = sessionIdFromPath(data.session) || state.sessionId;
     }
+    if (data.settings) {
+      state.settings = { ...state.settings, ...data.settings };
+      applyTheme(state.settings.theme, false);
+    }
+    if (data.cwd) state.cwd = data.cwd;
+    if (data.mcpPath) state.mcpPath = data.mcpPath;
     if (Array.isArray(data.mcp)) updateMcp(data.mcp);
   }
 
@@ -891,6 +947,7 @@
 
   function populateModels(data, current) {
     const models = (data && data.models) || [];
+    state.models = models;
     modelSelect.innerHTML = "";
     for (const model of models) {
       const option = el("option", "", model.name);
@@ -907,6 +964,407 @@
       modelSelect.value = selected;
     }
   }
+
+  /* ---------- settings + connectors ---------- */
+
+  function selectTab(name) {
+    for (const tab of document.querySelectorAll(".tab")) {
+      tab.classList.toggle("active", tab.dataset.tab === name);
+    }
+    for (const panel of document.querySelectorAll(".tab-panels")) {
+      panel.hidden = panel.dataset.panel !== name;
+    }
+    if (name === "connectors") void refreshConnectors();
+    if (name === "about") fillAbout();
+  }
+
+  function fillAbout() {
+    aboutCwd.textContent = state.cwd || "—";
+    aboutSession.textContent = state.sessionFile || "—";
+    aboutMcp.textContent = state.mcpPath || "—";
+  }
+
+  function openModal(tab) {
+    modal.hidden = false;
+    resetConnectorForm();
+    selectTab(tab || "general");
+    void loadSettingsPanel();
+    void refreshConnectors();
+    fillAbout();
+  }
+
+  function closeModal() {
+    modal.hidden = true;
+  }
+
+  function populateSettingsModels(current) {
+    settingModel.innerHTML = "";
+    const none = el("option", "", "First available");
+    none.value = "";
+    settingModel.appendChild(none);
+    for (const model of state.models) {
+      const option = el("option", "", model.name);
+      option.value = model.name;
+      settingModel.appendChild(option);
+    }
+    if (current && !state.models.some((model) => model.name === current)) {
+      const option = el("option", "", current);
+      option.value = current;
+      settingModel.appendChild(option);
+    }
+    settingModel.value = current || "";
+  }
+
+  async function loadSettingsPanel() {
+    try {
+      const settings = await bridge.getSettings();
+      state.settings = { ...state.settings, ...settings };
+      settingTheme.value = settings.theme || "system";
+      settingMode.value = settings.mode || "default";
+      settingThinking.checked = settings.showThinking !== false;
+      populateSettingsModels(settings.model || "");
+      settingsError.hidden = true;
+    } catch (error) {
+      settingsError.textContent = error instanceof Error ? error.message : String(error);
+      settingsError.hidden = false;
+    }
+  }
+
+  settingsSave.addEventListener("click", async () => {
+    settingsError.hidden = true;
+    settingsSave.disabled = true;
+    try {
+      const next = await bridge.updateSettings({
+        theme: settingTheme.value,
+        model: settingModel.value,
+        mode: settingMode.value,
+        showThinking: settingThinking.checked,
+      });
+      state.settings = { ...state.settings, ...next };
+      applyTheme(next.theme || "system", false);
+      closeModal();
+    } catch (error) {
+      settingsError.textContent = error instanceof Error ? error.message : String(error);
+      settingsError.hidden = false;
+    } finally {
+      settingsSave.disabled = false;
+    }
+  });
+
+  function splitLines(text) {
+    return String(text || "")
+      .split("\n")
+      .map((line) => line.trim())
+      .filter(Boolean);
+  }
+
+  function parsePairs(text) {
+    const out = {};
+    for (const line of splitLines(text)) {
+      const index = line.indexOf("=");
+      if (index <= 0) {
+        throw new Error(`Invalid line "${line}" (expected KEY=VALUE).`);
+      }
+      out[line.slice(0, index).trim()] = line.slice(index + 1).trim();
+    }
+    return Object.keys(out).length > 0 ? out : undefined;
+  }
+
+  function pairsToLines(value) {
+    if (!value || typeof value !== "object") return "";
+    return Object.entries(value)
+      .map(([key, entry]) => `${key}=${entry}`)
+      .join("\n");
+  }
+
+  function updateTransportSections() {
+    for (const section of document.querySelectorAll(".mcp-section[data-transport]")) {
+      section.hidden = section.dataset.transport !== mcpTransport.value;
+    }
+  }
+
+  function updateAuthSections() {
+    mcpAuthExplicit.hidden = mcpAuth.value !== "explicit";
+  }
+
+  function resetConnectorForm() {
+    mcpForm.hidden = true;
+    mcpError.hidden = true;
+    mcpName.value = "";
+    mcpName.disabled = false;
+    mcpTransport.value = "stdio";
+    mcpCommand.value = "";
+    mcpArgs.value = "";
+    mcpEnv.value = "";
+    mcpCwd.value = "";
+    mcpUrl.value = "";
+    mcpHeaders.value = "";
+    mcpAuth.value = "none";
+    mcpAuthUrl.value = "";
+    mcpTokenUrl.value = "";
+    mcpClientId.value = "";
+    mcpClientSecret.value = "";
+    mcpScopes.value = "";
+    mcpRedirectPort.value = "";
+    updateTransportSections();
+    updateAuthSections();
+  }
+
+  function fillConnectorForm(name, config) {
+    mcpError.hidden = true;
+    mcpForm.hidden = false;
+    mcpName.value = name;
+    mcpName.disabled = true;
+
+    if (config && typeof config.command === "string") {
+      mcpTransport.value = "stdio";
+      mcpCommand.value = config.command;
+      mcpArgs.value = Array.isArray(config.args) ? config.args.join("\n") : "";
+      mcpEnv.value = pairsToLines(config.env);
+      mcpCwd.value = typeof config.cwd === "string" ? config.cwd : "";
+    } else {
+      mcpTransport.value = "http";
+      mcpUrl.value = config && typeof config.url === "string" ? config.url : "";
+      mcpHeaders.value = pairsToLines(config && config.headers);
+      const auth = config && config.auth;
+      if (!auth) {
+        mcpAuth.value = "none";
+      } else if (auth.authorizationUrl || auth.clientId) {
+        mcpAuth.value = "explicit";
+        mcpAuthUrl.value = auth.authorizationUrl || "";
+        mcpTokenUrl.value = auth.tokenUrl || "";
+        mcpClientId.value = auth.clientId || "";
+        mcpClientSecret.value = auth.clientSecret || "";
+        mcpScopes.value = Array.isArray(auth.scopes) ? auth.scopes.join(" ") : "";
+        mcpRedirectPort.value = auth.redirectPort ? String(auth.redirectPort) : "";
+      } else {
+        mcpAuth.value = "discover";
+      }
+    }
+    updateTransportSections();
+    updateAuthSections();
+  }
+
+  function buildConnectorConfig() {
+    if (mcpTransport.value === "stdio") {
+      const command = mcpCommand.value.trim();
+      if (!command) throw new Error("Command is required for stdio connectors.");
+      const config = { type: "stdio", command };
+      const args = splitLines(mcpArgs.value);
+      if (args.length > 0) config.args = args;
+      const env = parsePairs(mcpEnv.value);
+      if (env) config.env = env;
+      const cwd = mcpCwd.value.trim();
+      if (cwd) config.cwd = cwd;
+      return config;
+    }
+
+    const url = mcpUrl.value.trim();
+    if (!url) throw new Error("URL is required for http connectors.");
+    const config = { type: "http", url };
+    const headers = parsePairs(mcpHeaders.value);
+    if (headers) config.headers = headers;
+
+    if (mcpAuth.value === "discover") {
+      config.auth = { type: "oauth" };
+    } else if (mcpAuth.value === "explicit") {
+      const authorizationUrl = mcpAuthUrl.value.trim();
+      const tokenUrl = mcpTokenUrl.value.trim();
+      const clientId = mcpClientId.value.trim();
+      if (!authorizationUrl || !tokenUrl || !clientId) {
+        throw new Error("Authorization URL, token URL, and client ID are required.");
+      }
+      const auth = { type: "oauth", authorizationUrl, tokenUrl, clientId };
+      const clientSecret = mcpClientSecret.value.trim();
+      if (clientSecret) auth.clientSecret = clientSecret;
+      const scopes = mcpScopes.value
+        .split(/[\s,]+/)
+        .map((scope) => scope.trim())
+        .filter(Boolean);
+      if (scopes.length > 0) auth.scopes = scopes;
+      const port = Number(mcpRedirectPort.value);
+      if (Number.isFinite(port) && port > 0) auth.redirectPort = port;
+      config.auth = auth;
+    }
+    return config;
+  }
+
+  function describeConnector(config) {
+    if (!config || typeof config !== "object") return "not in config file";
+    if (typeof config.command === "string") {
+      const args = Array.isArray(config.args) ? ` ${config.args.join(" ")}` : "";
+      return `stdio · ${config.command}${args}`.slice(0, 140);
+    }
+    if (typeof config.url === "string") {
+      return `http · ${config.url}${config.auth ? " · OAuth" : ""}`.slice(0, 140);
+    }
+    return "unknown";
+  }
+
+  function renderConnectors(data) {
+    mcpListEl.innerHTML = "";
+    const statuses = data.servers || [];
+    const configs = data.configs || {};
+    const names = new Set([
+      ...statuses.map((server) => server.name),
+      ...Object.keys(configs),
+    ]);
+    if (names.size === 0) {
+      mcpListEl.appendChild(el("div", "empty-list", "No connectors configured."));
+      return;
+    }
+
+    for (const name of [...names].sort()) {
+      const status = statuses.find((server) => server.name === name);
+      const config = configs[name];
+      const row = el("div", "connector");
+      const main = el("div", "connector-main");
+      const title = el("div", "connector-name");
+      title.appendChild(document.createTextNode(name));
+      if (status && status.ok) {
+        title.appendChild(
+          el("span", "badge ok", `${status.toolCount} tool${status.toolCount === 1 ? "" : "s"}`),
+        );
+      } else if (status) {
+        title.appendChild(el("span", "badge bad", "failed"));
+      } else {
+        title.appendChild(el("span", "badge", "not connected"));
+      }
+      main.appendChild(title);
+      main.appendChild(el("div", "connector-sub", describeConnector(config)));
+      if (status && !status.ok && status.error) {
+        main.appendChild(el("div", "connector-error", status.error));
+      }
+      row.appendChild(main);
+
+      const actions = el("div", "connector-actions");
+      const reconnect = el("button", "", "Reconnect");
+      reconnect.type = "button";
+      reconnect.addEventListener("click", async () => {
+        reconnect.disabled = true;
+        reconnect.textContent = "Connecting…";
+        try {
+          const next = await bridge.mcpReconnect(name);
+          state.mcpData = next;
+          updateMcp(next.servers || []);
+          renderConnectors(next);
+        } catch (error) {
+          showMcpError(error instanceof Error ? error.message : String(error));
+        } finally {
+          reconnect.disabled = false;
+          reconnect.textContent = "Reconnect";
+        }
+      });
+      actions.appendChild(reconnect);
+
+      if (config && config.auth) {
+        const logout = el("button", "", "Sign out");
+        logout.type = "button";
+        logout.addEventListener("click", async () => {
+          try {
+            const next = await bridge.mcpLogout(name);
+            state.mcpData = next;
+            renderConnectors(next);
+          } catch (error) {
+            showMcpError(error instanceof Error ? error.message : String(error));
+          }
+        });
+        actions.appendChild(logout);
+      }
+
+      if (config) {
+        const edit = el("button", "", "Edit");
+        edit.type = "button";
+        edit.addEventListener("click", () => fillConnectorForm(name, config));
+        actions.appendChild(edit);
+
+        const remove = el("button", "", "Delete");
+        remove.type = "button";
+        remove.addEventListener("click", async () => {
+          if (!confirm(`Delete connector "${name}"?`)) return;
+          try {
+            const next = await bridge.mcpRemove(name);
+            state.mcpData = next;
+            updateMcp(next.servers || []);
+            renderConnectors(next);
+            resetConnectorForm();
+          } catch (error) {
+            showMcpError(error instanceof Error ? error.message : String(error));
+          }
+        });
+        actions.appendChild(remove);
+      }
+
+      row.appendChild(actions);
+      mcpListEl.appendChild(row);
+    }
+  }
+
+  async function refreshConnectors() {
+    try {
+      const data = await bridge.mcpList();
+      state.mcpData = data;
+      if (data.path) state.mcpPath = data.path;
+      updateMcp(data.servers || []);
+      mcpPathEl.textContent = data.error
+        ? `${data.path} — ${data.error}`
+        : `Editing ${data.path}`;
+      aboutMcp.textContent = data.path || "—";
+      renderConnectors(data);
+    } catch (error) {
+      mcpPathEl.textContent = error instanceof Error ? error.message : String(error);
+    }
+  }
+
+  function showMcpError(message) {
+    mcpError.textContent = message;
+    mcpError.hidden = false;
+  }
+
+  settingsBtn.addEventListener("click", () => openModal("general"));
+  modalClose.addEventListener("click", closeModal);
+  modal.addEventListener("click", (event) => {
+    if (event.target === modal) closeModal();
+  });
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && !modal.hidden) closeModal();
+  });
+  for (const tab of document.querySelectorAll(".tab")) {
+    tab.addEventListener("click", () => selectTab(tab.dataset.tab));
+  }
+  mcpAdd.addEventListener("click", () => {
+    resetConnectorForm();
+    mcpForm.hidden = false;
+    mcpName.focus();
+  });
+  mcpCancel.addEventListener("click", resetConnectorForm);
+  mcpTransport.addEventListener("change", updateTransportSections);
+  mcpAuth.addEventListener("change", updateAuthSections);
+  mcpForm.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    mcpError.hidden = true;
+    mcpSave.disabled = true;
+    const label = mcpSave.textContent;
+    mcpSave.textContent = "Saving…";
+    try {
+      const name = mcpName.value.trim();
+      if (!name) throw new Error("Connector name is required.");
+      const config = buildConnectorConfig();
+      const data = await bridge.mcpSave(name, config);
+      state.mcpData = data;
+      state.mcpPath = data.path || state.mcpPath;
+      updateMcp(data.servers || []);
+      mcpPathEl.textContent = `Editing ${data.path}`;
+      aboutMcp.textContent = data.path || "—";
+      renderConnectors(data);
+      resetConnectorForm();
+    } catch (error) {
+      showMcpError(error instanceof Error ? error.message : String(error));
+    } finally {
+      mcpSave.disabled = false;
+      mcpSave.textContent = label;
+    }
+  });
 
   modelSelect.addEventListener("change", async () => {
     try {
@@ -927,6 +1385,13 @@
   });
 
   async function init() {
+    try {
+      const settings = await bridge.getSettings();
+      state.settings = { ...state.settings, ...settings };
+      applyTheme(settings.theme || "system", false);
+    } catch {
+      // Settings are optional; localStorage already applied a theme.
+    }
     try {
       const stateData = await bridge.getState();
       applyState(stateData);

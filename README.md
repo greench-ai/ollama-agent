@@ -215,6 +215,13 @@ HTTP API:
 | POST | `/api/sessions/rename` | rename `{id, title}` |
 | POST | `/api/sessions/delete` | delete `{id}` |
 | POST | `/api/cancel` | abort the running turn |
+| GET | `/api/settings` | theme, default model/mode, show-thinking |
+| POST | `/api/settings` | update settings |
+| GET | `/api/mcp` | connector config path, statuses, and raw configs |
+| POST | `/api/mcp/save` | add or update `{name, config}` |
+| POST | `/api/mcp/remove` | remove `{name}` |
+| POST | `/api/mcp/reconnect` | reconnect `{name}` (or all) |
+| POST | `/api/mcp/logout` | clear the stored OAuth token for `{name}` |
 
 SSE events: `start`, `thinking`, `text`, `tool_start`, `tool_end`, `notice`,
 `subagent_start`, `subagent_end`, `session_title`, `error`, `approval`,
@@ -326,6 +333,23 @@ Wine; the macOS zip builds unsigned; dmg and signing require macOS.
 - Single-instance lock; second launch focuses the existing window
 - Window bounds persisted under Electron's `userData` directory
 
+## Settings and connectors
+
+The Settings dialog (sidebar → Settings) has three tabs:
+
+- **General** — theme, default model, default permission mode, and whether
+  reasoning is shown. Stored in `~/.local/share/ollama-agent/settings.json` and
+  applied at startup and to new sessions. The header pickers change only the
+  current session.
+- **Connectors** — add, edit, remove, reconnect, and sign out of MCP servers.
+  Supports stdio (command, args, env, cwd) and HTTP (URL, headers, OAuth:
+  none / discover / explicit endpoints). Changes are written to the active
+  config file (its path is shown) with `${VAR}` templates preserved, then the
+  MCP manager restarts so new tools are available on the next turn.
+- **About** — working directory, session file, and connector config path.
+
+Connector changes are blocked while a turn is running.
+
 ## Design notes
 
 - The provider interface is deliberately Anthropic-shaped (content blocks,
@@ -339,13 +363,13 @@ Wine; the macOS zip builds unsigned; dmg and signing require macOS.
 
 Early. Implemented: streaming, tool loop, permissions, sessions with a
 Claude-Desktop-style shell (sidebar, searchable history, rename/delete/resume,
-markdown rendering, stop button, themes), 8 built-in tools (including `Task`
-subagents with isolated context), image input (user attachments, Read on
-images, MCP image results), an MCP client (stdio + Streamable HTTP; tools,
-resources, prompts, pagination, annotations, reconnect, OAuth authorization-code
-+ PKCE with discovery and dynamic client registration), a local HTTP/SSE server
-with the same web client, an Electron shell with a sandboxed renderer, IPC
-approvals, plan-mode propose/approve/apply, CSP, window-state persistence, menus,
-Linux packaging (AppImage + deb), cross-platform CI packaging (Windows
-NSIS/zip, macOS dmg/zip x64 + arm64), and electron-updater wiring. Not yet: code
-signing/notarization, projects, artifacts, and settings/connector management.
+markdown rendering, stop button, themes), settings and connector management,
+8 built-in tools (including `Task` subagents with isolated context), image input
+(user attachments, Read on images, MCP image results), an MCP client (stdio +
+Streamable HTTP; tools, resources, prompts, pagination, annotations, reconnect,
+OAuth authorization-code + PKCE with discovery and dynamic client registration),
+a local HTTP/SSE server with the same web client, an Electron shell with a
+sandboxed renderer, IPC approvals, plan-mode propose/approve/apply, CSP,
+window-state persistence, menus, Linux packaging (AppImage + deb), cross-platform
+CI packaging (Windows NSIS/zip, macOS dmg/zip x64 + arm64), and electron-updater
+wiring. Not yet: code signing/notarization, projects, and artifacts.
