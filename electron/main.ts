@@ -45,10 +45,11 @@ import {
 import {
   loadSkills,
   summarizeSkills,
-  withSkillCatalog,
   type SkillDefinition,
 } from "../src/core/skills.ts";
 import { HooksEngine } from "../src/core/hooks.ts";
+import { BackgroundManager } from "../src/core/background.ts";
+import { createBackgroundAgent } from "../src/core/background-agent.ts";
 import { loadMcpConfig, type McpServerConfig } from "../src/mcp/config.ts";
 import {
   defaultMcpConfigPath,
@@ -138,6 +139,7 @@ let agentDefinitions: Map<string, AgentDefinition> = new Map();
 let skills: Map<string, SkillDefinition> = new Map();
 let hooks = new HooksEngine();
 let mcp: McpManager | undefined;
+let background: BackgroundManager;
 
 type UpdaterStateName =
   | "idle"
@@ -273,7 +275,7 @@ async function applyMcpServers(
           },
         })
       : undefined;
-  agent.tools = [...allTools, ...(mcp?.tools ?? [])];
+  agent.setTools([...allTools, ...(mcp?.tools ?? [])]);
 }
 
 function forwardAgentEvent(event: AgentEvent): void {
@@ -394,6 +396,29 @@ async function initCore(): Promise<void> {
     hooks,
     onEvent: forwardAgentEvent,
   });
+
+  background = await BackgroundManager.load({
+    createAgent: async ({ cwd, model: jobModel, mode }) => {
+      const instructions = await loadProjectInstructions(cwd);
+      return createBackgroundAgent({
+        provider,
+        tools: [...allTools, ...(mcp?.tools ?? [])],
+        system: `${buildSystemPrompt(cwd, instructions)}\n\n${agentCatalogPrompt(agentDefinitions)}`,
+        cwd,
+        model: jobModel,
+        mode,
+        agentDefinitions,
+        skills,
+        hooks,
+      });
+    },
+    onEvent: (event) => {
+      mainWindow?.webContents.send("agent:event", {
+        type: "background_event",
+        event,
+      });
+    },
+  });
 }
 
 function registerIpc(): void {
@@ -408,6 +433,94 @@ function registerIpc(): void {
     agents: summarizeAgentDefinitions(agentDefinitions),
     skills: summarizeSkills(skills),
   }));
+
+  ipcMain.handle("telemetry:get", async () => ({
+    summary: agent.telemetry ? await agent.telemetry.summary() : null,
+    runs: agent.telemetry ? await agent.telemetry.list(20) : [],
+  }));
+
+  ipcMain.handle("background:state", async () => ({
+    state: await background.stateSnapshot(),
+  }));
+
+  ipcMain.handle("background:dispatch", async (_event, payload: unknown) => {
+    const body = asRecord(payload);
+    const prompt = typeof body.prompt === "string" ? body.prompt.trim() : "";
+    if (!prompt) throw new Error("Missing background prompt.");
+    const cwd =
+      typeof body.cwd === "string" && body.cwd
+        ? await assertDirectory(body.cwd)
+        : options.cwd;
+    const mode =
+      typeof body.mode === "string" &&
+      PERMISSION_MODES.includes(body.mode as PermissionMode)
+        ? (body.mode as PermissionMode)
+        : permissions.mode;
+    const job = await background.dispatch({
+      prompt,
+      cwd,
+      model:
+        typeof body.model === "string" && body.model.trim()
+          ? body.model.trim()
+          : agent.model,
+      mode,
+      title: typeof body.title === "string" ? body.title : undefined,
+    });
+    return { job, state: await background.stateSnapshot() };
+  });
+
+  ipcMain.handle("background:cancel", async (_event, payload: unknown) => {
+    const id = asRecord(payload).id;
+    if (typeof id !== "string" || !id) throw new Error("Missing job id.");
+    await background.cancel(id);
+    return { state: await background.stateSnapshot() };
+  });
+
+  ipcMain.handle("background:transcript", async (_event, payload: unknown) => {
+    const id = asRecord(payload).id;
+    return {
+      messages: await background.transcript(typeof id === "string" ? id : ""),
+    };
+  });
+
+  ipcMain.handle("background:schedule:add", async (_event, payload: unknown) => {
+    const body = asRecord(payload);
+    const name = typeof body.name === "string" ? body.name.trim() : "";
+    const prompt = typeof body.prompt === "string" ? body.prompt.trim() : "";
+    const cron = typeof body.cron === "string" ? body.cron.trim() : "";
+    if (!name || !prompt || !cron) {
+      throw new Error("Schedule needs name, prompt, and cron.");
+    }
+    const cwd =
+      typeof body.cwd === "string" && body.cwd
+        ? await assertDirectory(body.cwd)
+        : options.cwd;
+    const mode =
+      typeof body.mode === "string" &&
+      PERMISSION_MODES.includes(body.mode as PermissionMode)
+        ? (body.mode as PermissionMode)
+        : permissions.mode;
+    const schedule = await background.addSchedule({
+      name,
+      prompt,
+      cron,
+      cwd,
+      model:
+        typeof body.model === "string" && body.model.trim()
+          ? body.model.trim()
+          : agent.model,
+      mode,
+      enabled: body.enabled !== false,
+    });
+    return { schedule, state: await background.stateSnapshot() };
+  });
+
+  ipcMain.handle("background:schedule:remove", async (_event, payload: unknown) => {
+    const id = asRecord(payload).id;
+    if (typeof id !== "string" || !id) throw new Error("Missing schedule id.");
+    await background.removeSchedule(id);
+    return { state: await background.stateSnapshot() };
+  });
 
   ipcMain.handle("checkpoints:list", async () => ({
     checkpoints: agent.checkpoints ? await agent.checkpoints.list(50) : [],
@@ -732,7 +845,7 @@ function registerIpc(): void {
     agent.agentDefinitions = agentDefinitions;
     agent.skills = skills;
     agent.hooks = hooks;
-    agent.system = withSkillCatalog(
+    agent.setSystem(
       `${buildSystemPrompt(directory, projectInstructions)}\n\n${agentCatalogPrompt(agentDefinitions)}`,
       skills,
     );
@@ -1179,6 +1292,8 @@ if (!app.requestSingleInstanceLock()) {
   });
 
   app.on("before-quit", () => {
+    void background?.close();
+    void agent?.close();
     void mcp?.close();
   });
 }

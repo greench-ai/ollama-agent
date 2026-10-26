@@ -448,7 +448,7 @@
         padding: 8px 10px;
         margin: 0;
       }
-      .team-message-form { display: flex; gap: 6px; }
+      .team-message-form { display: flex; gap: 6px; flex-wrap: wrap; }
       .team-message-form input {
         flex: 1;
         background: var(--surface);
@@ -874,6 +874,7 @@
       .modal-title { font-weight: 700; }
       .tabs {
         display: flex;
+        flex-wrap: wrap;
         gap: 4px;
         padding: 8px 12px;
         border-bottom: 1px solid var(--border);
@@ -1155,6 +1156,7 @@
           <button class="tab" data-tab="connectors" type="button">Connectors</button>
           <button class="tab" data-tab="agents" type="button">Agents</button>
           <button class="tab" data-tab="rewind" type="button">Rewind</button>
+          <button class="tab" data-tab="background" type="button">Background</button>
           <button class="tab" data-tab="about" type="button">About</button>
         </div>
 
@@ -1307,6 +1309,31 @@
           <div class="mcp-list" id="checkpoints-list"></div>
         </div>
 
+        <div class="tab-panels" data-panel="background" hidden>
+          <div class="hint">
+            Background jobs run in independent sessions. Mutating tools need
+            acceptEdits or bypassPermissions because background jobs cannot ask
+            for approval.
+          </div>
+          <form class="team-message-form" id="background-form">
+            <input id="background-prompt" placeholder="Background prompt…" />
+            <button type="submit" class="send" id="background-run">Run</button>
+          </form>
+          <div class="notice error" id="background-error" hidden></div>
+          <div class="hint">Jobs</div>
+          <div class="mcp-list" id="background-jobs"></div>
+          <div class="hint">Transcript <span id="background-transcript-title"></span></div>
+          <pre class="team-transcript" id="background-transcript" hidden></pre>
+          <div class="hint">Schedules</div>
+          <div class="mcp-list" id="background-schedules"></div>
+          <form class="team-message-form" id="schedule-form">
+            <input id="schedule-name" placeholder="Name" style="max-width: 110px" />
+            <input id="schedule-cron" placeholder="Cron (0 9 * * 1-5)" style="max-width: 150px" />
+            <input id="schedule-prompt" placeholder="Scheduled prompt…" />
+            <button type="submit" class="send" id="schedule-add">Add</button>
+          </form>
+        </div>
+
         <div class="tab-panels" data-panel="about" hidden>
           <p>
             <strong>ollama-agent</strong> — an agentic coding client for Ollama
@@ -1317,6 +1344,7 @@
           <div class="hint">Project instructions: <span id="about-instructions"></span></div>
           <div class="hint">Session: <span id="about-session"></span></div>
           <div class="hint">Connector config: <span id="about-mcp"></span></div>
+          <div class="hint">Telemetry (this session): <span id="about-telemetry">—</span></div>
           <div class="notice" id="about-update-status"></div>
           <div class="modal-actions">
             <button type="button" id="update-check">Check for updates</button>

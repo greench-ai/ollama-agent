@@ -279,6 +279,60 @@ other non-zero exits are advisory. Timed-out policy hooks fail closed. Hook
 stdout/stderr appears as a notice. Hooks are arbitrary local commands, so only
 install configs you trust. `/hooks` reloads and lists them.
 
+## Deferred tool loading
+
+When the tool set is large (default threshold: 20 tools) and at least three MCP
+tools are present, MCP schemas are deferred. The system prompt lists their
+names and descriptions; the model calls `ToolSearch` with a keyword, gets the
+matching schemas, and can call those tools on the next turn. Core, team, and
+skill tools always stay loaded. Set `toolSearch: false` or adjust
+`toolSearchThreshold` on the Agent. Deferred catalogs are per agent; teammates
+and subagents do not inherit them.
+
+## Background jobs and schedules
+
+Settings → Background (and the HTTP API) can dispatch prompts into independent
+sessions while the main chat continues. Jobs queue behind a concurrency cap
+(default 2), persist under `~/.local/share/ollama-agent/background/state.json`,
+can be stopped, and expose their transcripts. Running jobs interrupted by a
+restart are marked failed.
+
+Schedules use a standard five-field cron expression and run only while the
+server or desktop app is running. They persist across restarts, record
+`lastRunAt`/`nextRunAt`, and create ordinary background jobs. Background jobs
+cannot ask for approval, so mutating tools require `acceptEdits` or
+`bypassPermissions`; `default` denies them.
+
+## ACP server
+
+`npm run build:acp` produces `dist/acp.mjs`, a newline-delimited JSON-RPC Agent
+Client Protocol v1 server over stdio. It supports `initialize`, `session/new`,
+`session/prompt`, `session/set_mode`, `session/close`, `session/cancel`,
+streaming `agent_message_chunk` / `agent_thought_chunk` / `tool_call` updates,
+image prompt blocks, and `session/request_permission` mapped to the normal
+permission engine.
+
+```
+node dist/acp.mjs --model qwen3:8b --cwd /path/to/project --mode acceptEdits
+```
+
+Point an ACP client (Zed, Neovim, Emacs) at that command. ACP `mcpServers` from
+the client are not consumed; the server uses the local MCP config. Advertised
+session modes are `default`, `acceptEdits`, `plan`, and
+`bypassPermissions`.
+
+## Telemetry and eval
+
+Every run appends one JSON line per session to
+`~/.local/share/ollama-agent/telemetry/<session>.jsonl`: turns, tool counts,
+input/output tokens, compactions, tool errors, duration, stop reason, agent
+name, model. `/telemetry` shows the current session summary; `/telemetry runs`
+shows recent runs. Settings → About shows the summary.
+
+`npm run eval` runs scripted-provider scenarios for the tool loop, edit
+checkpoint/restore, and deferred tool loading, then prints one JSON result per
+scenario. It runs in CI.
+
 ## MCP servers
 
 MCP servers use a Claude-compatible `mcpServers` object. The CLI looks for
@@ -384,10 +438,24 @@ HTTP API:
 | POST | `/api/update/install` | install a downloaded update (desktop only) |
 | POST | `/api/project/set` | switch project folder `{path}` |
 | GET | `/api/file?path=` | preview a text file inside the project |
+| GET | `/api/agents` | agent definitions and loaded skills |
+| GET | `/api/skills` | loaded skills |
+| GET | `/api/hooks` | loaded lifecycle hooks |
+| GET | `/api/telemetry` | current-session telemetry summary and runs |
+| GET | `/api/checkpoints` | file checkpoints for the current session |
+| POST | `/api/checkpoints/restore` | restore `{id}` |
+| GET | `/api/team` | team state snapshot |
+| GET | `/api/team/review?name=` | worktree review |
+| GET | `/api/background` | background jobs and schedules |
+| POST | `/api/background` | dispatch a background prompt |
+| POST | `/api/background/cancel` | cancel `{id}` |
+| GET | `/api/background/transcript?id=` | job transcript |
+| POST | `/api/background/schedules` | add a cron schedule |
+| POST | `/api/background/schedules/remove` | remove a schedule |
 
 SSE events: `start`, `thinking`, `text`, `tool_start`, `tool_end`, `notice`,
 `subagent_start`, `subagent_end`, `session_title`, `error`, `approval`,
-`plan_approval`, `step`, `done` (with `used`/`budget`).
+`plan_approval`, `background_event`, `step`, `done` (with `used`/`budget`).
 
 The bundled client (`web/index.html`) is the desktop shell:
 
@@ -583,7 +651,9 @@ checker, agent definitions (Markdown roles), a team core (task board, mailboxes,
 background teammate runs, transcripts, persistence), git worktree isolation with
 serialized trial-merge and test gates, skills with progressive disclosure,
 file checkpoints with `/rewind`, lifecycle hooks, a whitespace-tolerant Edit
-fallback for local models, built-in tools (including `Task` subagents),
+fallback for local models, deferred MCP tool loading, background jobs with cron
+schedules, an ACP v1 stdio server, run telemetry and a scripted eval harness,
+built-in tools (including `Task` subagents),
 image/text/PDF input, an MCP client
 (stdio + Streamable HTTP; tools, resources, prompts, pagination, annotations,
 reconnect, OAuth authorization-code + PKCE with discovery and dynamic client
@@ -591,5 +661,5 @@ registration), a local HTTP/SSE server with the same web client, an Electron
 shell with a sandboxed renderer, IPC approvals, plan-mode
 propose/approve/apply, CSP, window-state persistence, menus, Linux packaging
 (AppImage + deb), cross-platform CI packaging (Windows NSIS/zip, macOS dmg/zip
-x64 + arm64), and electron-updater wiring. Not yet: deferred tool loading,
-ACP, scheduled agents, and code signing/notarization.
+x64 + arm64), and electron-updater wiring. Not yet: code signing and
+notarization.

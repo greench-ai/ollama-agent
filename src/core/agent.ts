@@ -28,14 +28,25 @@ import { compactMessages, estimateMessages } from "./tokens.ts";
 import { Session } from "./session.ts";
 import { TeamManager, type TeamAgentEvent, type TeamEvent } from "./team.ts";
 import { memberTeamTools, TEAM_TOOL_NAMES } from "../tools/team.ts";
-import { skillCatalogPrompt, type SkillDefinition } from "./skills.ts";
+import { withSkillCatalog, type SkillDefinition } from "./skills.ts";
 import { CheckpointStore } from "./checkpoints.ts";
 import { HooksEngine } from "./hooks.ts";
+import { TelemetryStore, newTelemetryRun } from "./telemetry.ts";
+
+interface RunMetrics {
+  startedAt: number;
+  turns: number;
+  tools: Record<string, number>;
+  inputTokens: number;
+  outputTokens: number;
+  compactions: number;
+  toolErrors: number;
+}
 export type AgentEvent =
   | { type: "text"; text: string }
   | { type: "thinking"; text: string }
-  | { type: "tool_start"; name: string; input: Record<string, unknown>; summary: string }
-  | { type: "tool_end"; name: string; content: string; isError: boolean }
+  | { type: "tool_start"; name: string; input: Record<string, unknown>; summary: string; id?: string }
+  | { type: "tool_end"; name: string; content: string; isError: boolean; id?: string }
   | { type: "notice"; text: string }
   | { type: "usage"; usage: Usage }
   | { type: "turn_end" }
@@ -94,6 +105,12 @@ export interface AgentOptions {
   checkpoints?: CheckpointStore | false;
   /** Lifecycle hooks loaded from user/project config. */
   hooks?: HooksEngine;
+  /** Set false to send every tool schema (default: defer MCP tools when many). */
+  toolSearch?: boolean;
+  /** Tool-count threshold before MCP tools are deferred (default 20). */
+  toolSearchThreshold?: number;
+  /** Per-run telemetry store; create one by default, false disables it. */
+  telemetry?: TelemetryStore | false;
   /** Lead agents create a team manager unless disabled. */
   teamsEnabled?: boolean;
   onEvent?: (event: AgentEvent) => void;
@@ -129,7 +146,16 @@ export class Agent {
   skills: Map<string, SkillDefinition>;
   checkpoints?: CheckpointStore;
   hooks?: HooksEngine;
+  telemetry?: TelemetryStore;
+  private telemetryDisabled: boolean;
+  private activeMetrics?: RunMetrics;
   private checkpointsDisabled: boolean;
+  private allToolDefs: Tool[] = [];
+  private deferredTools = new Map<string, Tool>();
+  private toolSearchEnabled = false;
+  private toolSearchAllowed: boolean;
+  private toolSearchThreshold: number;
+  private baseSystem: string;
   private teamsEnabled: boolean;
   private subagentCounter = 0;
   private onEvent: (event: AgentEvent) => void;
@@ -143,15 +169,22 @@ export class Agent {
     this.cwd = options.cwd;
     this.system = options.system;
     this.skills = options.skills ?? new Map();
-    if (this.skills.size > 0) {
-      this.system = `${this.system}\n\n${skillCatalogPrompt(this.skills)}`;
-    }
+    this.baseSystem = withSkillCatalog(this.system, this.skills);
+    this.system = this.baseSystem;
+    this.toolSearchAllowed = options.toolSearch !== false;
+    this.toolSearchThreshold = Math.max(1, options.toolSearchThreshold ?? 20);
     this.checkpointsDisabled = options.checkpoints === false;
     this.checkpoints = this.checkpointsDisabled
       ? undefined
       : options.checkpoints instanceof CheckpointStore
         ? options.checkpoints
         : new CheckpointStore(this.session.id);
+    this.telemetryDisabled = options.telemetry === false;
+    this.telemetry = this.telemetryDisabled
+      ? undefined
+      : options.telemetry instanceof TelemetryStore
+        ? options.telemetry
+        : new TelemetryStore(this.session.id);
     this.hooks = options.hooks;    this.think = options.think ?? false;
     this.numCtx = options.numCtx;
     this.temperature = options.temperature;
@@ -175,11 +208,11 @@ export class Agent {
       this.team = this.createTeamManager(this.session.id);
     }
 
-    if (!this.team) {
-      this.tools = options.tools.filter((tool) => !TEAM_TOOL_NAMES.has(tool.name));
-    } else {
-      this.tools = options.tools;
-    }
+    this.allToolDefs = this.team
+      ? [...options.tools]
+      : options.tools.filter((tool) => !TEAM_TOOL_NAMES.has(tool.name));
+    this.tools = [...this.allToolDefs];
+    this.configureDeferredTools();
   }
 
   private contextBudget(): number {
@@ -187,8 +220,130 @@ export class Agent {
     return Math.max(4_000, Math.floor(window * 0.75));
   }
 
+  /** Replace the tool set (for example after MCP reload) and re-apply deferral. */
+  setTools(tools: Tool[]): void {
+    this.allToolDefs = this.team
+      ? [...tools]
+      : tools.filter((tool) => !TEAM_TOOL_NAMES.has(tool.name));
+    this.configureDeferredTools();
+  }
+
+  /** Replace the base system prompt and re-apply catalogs after a project change. */
+  setSystem(system: string, skills?: Map<string, SkillDefinition>): void {
+    if (skills) this.skills = skills;
+    this.baseSystem = withSkillCatalog(system, this.skills);
+    this.system = this.baseSystem;
+    if (this.deferredTools.size > 0) {
+      this.system = `${this.baseSystem}\n\n${this.deferredCatalogText()}`;
+    }
+  }
+
+  private deferredCatalogText(): string {
+    const catalog = [...this.deferredTools.values()]
+      .sort((a, b) => a.name.localeCompare(b.name))
+      .map((tool) => {
+        const description =
+          tool.description.length > 120
+            ? `${tool.description.slice(0, 117)}…`
+            : tool.description;
+        return `- ${tool.name}: ${description}`;
+      });
+    return `Deferred tools (schemas not loaded). Use ToolSearch with a keyword, then call the tool on the next turn:\n${catalog.join("\n")}`;
+  }
+
+  private configureDeferredTools(): void {
+    this.tools = [...this.allToolDefs];
+    this.system = this.baseSystem;
+    this.deferredTools.clear();
+    this.toolSearchEnabled = false;
+    const search = this.tools.find((tool) => tool.name === "ToolSearch");
+    if (
+      !this.toolSearchAllowed ||
+      !search ||
+      this.tools.length <= this.toolSearchThreshold
+    ) {
+      this.tools = this.tools.filter((tool) => tool.name !== "ToolSearch");
+      return;
+    }
+    const candidates = this.tools.filter((tool) => tool.name.includes("__"));
+    if (candidates.length < 3) {
+      this.tools = this.tools.filter((tool) => tool.name !== "ToolSearch");
+      return;
+    }
+    this.deferredTools = new Map(candidates.map((tool) => [tool.name, tool]));
+    this.tools = this.tools.filter((tool) => !this.deferredTools.has(tool.name));
+    this.toolSearchEnabled = true;
+    this.system = `${this.baseSystem}\n\n${this.deferredCatalogText()}`;
+  }
+
+  private async searchDeferredTools(
+    query: string,
+    limit = 5,
+  ): Promise<{ content: string; loaded: string[] }> {
+    const deferred = [...this.deferredTools.values()];
+    if (deferred.length === 0) {
+      return {
+        content: "No deferred tools remain; all available tools are loaded.",
+        loaded: [],
+      };
+    }
+    const terms = query
+      .toLowerCase()
+      .split(/[^a-z0-9_.-]+/)
+      .filter((term) => term.length > 1);
+    const scored = deferred
+      .map((tool) => {
+        const name = tool.name.toLowerCase();
+        const description = tool.description.toLowerCase();
+        let score = query.trim() === "*" ? 1 : 0;
+        for (const term of terms) {
+          if (name === term) score += 20;
+          else if (name.includes(term)) score += 8;
+          else if (description.includes(term)) score += 2;
+        }
+        return { tool, score };
+      })
+      .filter((entry) => entry.score > 0)
+      .sort((a, b) => b.score - a.score || a.tool.name.localeCompare(b.tool.name));
+    const selected = scored
+      .slice(0, Math.max(1, Math.min(10, Math.floor(limit) || 5)))
+      .map((entry) => entry.tool);
+    if (selected.length === 0) {
+      const names = deferred.map((tool) => tool.name).sort().join(", ");
+      return {
+        content: `No deferred tool matched "${query}". Available: ${names}.`,
+        loaded: [],
+      };
+    }
+    for (const tool of selected) {
+      if (!this.tools.some((entry) => entry.name === tool.name)) {
+        this.tools.push(tool);
+      }
+      this.deferredTools.delete(tool.name);
+    }
+    const schemas = selected.map((tool) =>
+      JSON.stringify(
+        {
+          name: tool.name,
+          description: tool.description,
+          inputSchema: tool.inputSchema,
+        },
+        null,
+        2,
+      ),
+    );
+    return {
+      content: `Loaded ${selected.length} tool(s): ${selected
+        .map((tool) => tool.name)
+        .join(", ")}.\nCall one of them on the next turn.\n\n${schemas.join("\n\n")}`,
+      loaded: selected.map((tool) => tool.name),
+    };
+  }
+
   private createTeamManager(parentSessionId: string): TeamManager {
-    const baseTools = this.tools.filter((tool) => !TEAM_TOOL_NAMES.has(tool.name));
+    const baseTools = this.tools.filter(
+      (tool) => !TEAM_TOOL_NAMES.has(tool.name) && tool.name !== "ToolSearch",
+    );
     let manager: TeamManager | undefined;
     manager = new TeamManager({
       leadModel: this.model,
@@ -268,6 +423,45 @@ export class Agent {
     images?: ImageAttachment[],
     files?: FileAttachment[],
   ): Promise<void> {
+    const metrics: RunMetrics = {
+      startedAt: Date.now(),
+      turns: 0,
+      tools: {},
+      inputTokens: 0,
+      outputTokens: 0,
+      compactions: 0,
+      toolErrors: 0,
+    };
+    this.activeMetrics = metrics;
+    let recorded = false;
+    const finishTelemetry = async (stopReason: string, error?: string) => {
+      if (recorded) return;
+      recorded = true;
+      this.activeMetrics = undefined;
+      if (!this.telemetry) return;
+      try {
+        await this.telemetry.record(
+          newTelemetryRun({
+            sessionId: this.session.id,
+            agentName: this.agentName,
+            model: this.model,
+            cwd: this.cwd,
+            startedAt: metrics.startedAt,
+            endedAt: Date.now(),
+            turns: metrics.turns,
+            tools: metrics.tools,
+            inputTokens: metrics.inputTokens,
+            outputTokens: metrics.outputTokens,
+            compactions: metrics.compactions,
+            toolErrors: metrics.toolErrors,
+            stopReason,
+            error,
+          }),
+        );
+      } catch {
+        // Telemetry must never break a turn.
+      }
+    };
     if (this.hooks?.has("SessionStart") && this.messages.length === 0) {
       const started = await this.hooks.run("SessionStart", {
         cwd: this.cwd,
@@ -290,6 +484,7 @@ export class Agent {
           type: "notice",
           text: `Prompt blocked by hook: ${submitted.reason ?? "exit 2"}`,
         });
+        await finishTelemetry("prompt_blocked");
         return;
       }
       if (submitted.output) {
@@ -315,8 +510,10 @@ export class Agent {
     }
 
     for (let turn = 0; turn < this.maxTurns; turn += 1) {
+      metrics.turns += 1;
       const compacted = compactMessages(this.messages, this.contextBudget());
       if (compacted.dropped > 0 || compacted.truncated > 0) {
+        metrics.compactions += 1;
         this.messages = compacted.messages;
         const parts: string[] = [];
         if (compacted.dropped) parts.push(`dropped ${compacted.dropped} old message(s)`);
@@ -371,10 +568,15 @@ export class Agent {
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         this.onEvent({ type: "error", message });
+        await finishTelemetry("error", message);
         throw error;
       }
 
-      if (usage) this.onEvent({ type: "usage", usage });
+      if (usage) {
+        metrics.inputTokens += usage.inputTokens ?? 0;
+        metrics.outputTokens += usage.outputTokens ?? 0;
+        this.onEvent({ type: "usage", usage });
+      }
       if (thinking.trim()) assistantBlocks.push({ type: "thinking", thinking });
       if (text) assistantBlocks.push({ type: "text", text });
       for (const call of toolCalls) {
@@ -410,6 +612,7 @@ export class Agent {
             });
           }
         }
+        await finishTelemetry(stopReason);
         this.onEvent({ type: "turn_end" });
         return;
       }
@@ -426,6 +629,7 @@ export class Agent {
       void stopReason;
     }
 
+    await finishTelemetry("max_turns");
     this.onEvent({
       type: "notice",
       text: `Stopped after ${this.maxTurns} turns without a final answer.`,
@@ -436,7 +640,7 @@ export class Agent {
     const tool = this.tools.find((candidate) => candidate.name === call.name);
     if (!tool) {
       const content = `Unknown tool "${call.name}".`;
-      this.onEvent({ type: "tool_end", name: call.name, content, isError: true });
+      this.onEvent({ type: "tool_end", name: call.name, content, isError: true, id: call.id });
       return {
         type: "tool_result",
         tool_use_id: call.id,
@@ -458,8 +662,9 @@ export class Agent {
         this.onEvent({ type: "notice", text: hooked.output });
       }
       if (hooked.blocked) {
+        if (this.activeMetrics) this.activeMetrics.toolErrors += 1;
         const content = `Blocked by PreToolUse hook: ${hooked.reason ?? "exit 2"}`;
-        this.onEvent({ type: "tool_end", name: tool.name, content, isError: true });
+        this.onEvent({ type: "tool_end", name: tool.name, content, isError: true, id: call.id });
         return {
           type: "tool_result",
           tool_use_id: call.id,
@@ -470,14 +675,19 @@ export class Agent {
       }
     }
 
+    if (this.activeMetrics) {
+      this.activeMetrics.tools[tool.name] =
+        (this.activeMetrics.tools[tool.name] ?? 0) + 1;
+    }
     const permission = await this.permissions.check({
       tool: tool.name,
       input: call.input,
       mutating: tool.mutating,
     });
     if (!permission.allowed) {
+      if (this.activeMetrics) this.activeMetrics.toolErrors += 1;
       const content = permission.reason ?? "Denied.";
-      this.onEvent({ type: "tool_end", name: tool.name, content, isError: true });
+      this.onEvent({ type: "tool_end", name: tool.name, content, isError: true, id: call.id });
       return {
         type: "tool_result",
         tool_use_id: call.id,
@@ -505,7 +715,7 @@ export class Agent {
     }
 
     const summary = summarizeToolInput(tool.name, call.input);
-    this.onEvent({ type: "tool_start", name: tool.name, input: call.input, summary });
+    this.onEvent({ type: "tool_start", name: tool.name, input: call.input, summary, id: call.id });
 
     const controller = new AbortController();
     const context: ToolContext = {
@@ -521,6 +731,12 @@ export class Agent {
       agentName: this.agentName,
       allowedRoot: this.workspaceRoot,
       skills: this.skills,
+      toolSearch: this.toolSearchEnabled
+        ? {
+            search: (query: string, limit?: number) =>
+              this.searchDeferredTools(query, limit),
+          }
+        : undefined,
     };
 
     let content: string;
@@ -536,6 +752,7 @@ export class Agent {
       isError = true;
     }
 
+    if (isError && this.activeMetrics) this.activeMetrics.toolErrors += 1;
     const postEvent = isError ? "PostToolUseFailure" : "PostToolUse";
     if (this.hooks?.has(postEvent)) {
       const hooked = await this.hooks.run(postEvent, {
@@ -561,7 +778,7 @@ export class Agent {
       await this.session.appendTodos(this.todos);
     }
 
-    this.onEvent({ type: "tool_end", name: tool.name, content, isError });
+    this.onEvent({ type: "tool_end", name: tool.name, content, isError, id: call.id });
     return {
       type: "tool_result",
       tool_use_id: call.id,
@@ -629,7 +846,8 @@ export class Agent {
       (tool) =>
         !TEAM_TOOL_NAMES.has(tool.name) &&
         tool.name !== "Task" &&
-        tool.name !== "ExitPlanMode",
+        tool.name !== "ExitPlanMode" &&
+        tool.name !== "ToolSearch",
     );
     if (definition.disallowedTools && definition.disallowedTools.length > 0) {
       const denied = new Set(definition.disallowedTools.map(toolBaseName));
@@ -767,6 +985,9 @@ export class Agent {
     this.todos = [];
     if (!this.checkpointsDisabled) {
       this.checkpoints = new CheckpointStore(session.id);
+    }
+    if (!this.telemetryDisabled) {
+      this.telemetry = new TelemetryStore(session.id);
     }
   }
 

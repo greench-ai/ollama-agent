@@ -48,6 +48,27 @@
 
     listAgents: () => fetch("/api/agents").then((response) => response.json()),
 
+    getTelemetry: () => fetch("/api/telemetry").then((response) => response.json()),
+
+    backgroundState: () =>
+      fetch("/api/background").then((response) => response.json()),
+
+    backgroundDispatch: (prompt, title) =>
+      post("/api/background", { prompt, title }),
+
+    backgroundCancel: (id) => post("/api/background/cancel", { id }),
+
+    backgroundTranscript: (id) =>
+      fetch(`/api/background/transcript?id=${encodeURIComponent(id)}`).then(
+        (response) => response.json(),
+      ),
+
+    backgroundAddSchedule: (input) =>
+      post("/api/background/schedules", input),
+
+    backgroundRemoveSchedule: (id) =>
+      post("/api/background/schedules/remove", { id }),
+
     listCheckpoints: () =>
       fetch("/api/checkpoints").then((response) => response.json()),
 

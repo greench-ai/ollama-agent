@@ -88,6 +88,13 @@ export interface TodoItem {
   activeForm: string;
 }
 
+export interface ToolSearchController {
+  search(
+    query: string,
+    limit?: number,
+  ): Promise<{ content: string; loaded: string[] }>;
+}
+
 export interface ToolContext {
   cwd: string;
   sessionId: string;
@@ -108,6 +115,8 @@ export interface ToolContext {
   allowedRoot?: string;
   /** Skills available to the Skill tool. */
   skills?: Map<string, SkillDefinition>;
+  /** Deferred-tool loader, when ToolSearch is enabled. */
+  toolSearch?: ToolSearchController;
 }
 
 export type SubagentType = string;

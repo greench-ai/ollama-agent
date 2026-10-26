@@ -38,6 +38,29 @@ const bridge = {
 
   listAgents: () => ipcRenderer.invoke("agents:list"),
 
+  getTelemetry: () => ipcRenderer.invoke("telemetry:get"),
+
+  backgroundState: () => ipcRenderer.invoke("background:state"),
+
+  backgroundDispatch: (prompt: string, title?: string) =>
+    ipcRenderer.invoke("background:dispatch", { prompt, title }),
+
+  backgroundCancel: (id: string) =>
+    ipcRenderer.invoke("background:cancel", { id }),
+
+  backgroundTranscript: (id: string) =>
+    ipcRenderer.invoke("background:transcript", { id }),
+
+  backgroundAddSchedule: (input: {
+    name: string;
+    prompt: string;
+    cron: string;
+    enabled?: boolean;
+  }) => ipcRenderer.invoke("background:schedule:add", input),
+
+  backgroundRemoveSchedule: (id: string) =>
+    ipcRenderer.invoke("background:schedule:remove", { id }),
+
   listCheckpoints: () => ipcRenderer.invoke("checkpoints:list"),
 
   restoreCheckpoint: (id: string) =>

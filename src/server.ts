@@ -39,12 +39,10 @@ import {
   loadAgentDefinitions,
   summarizeAgentDefinitions,
 } from "./core/agent-definitions.ts";
-import {
-  loadSkills,
-  summarizeSkills,
-  withSkillCatalog,
-} from "./core/skills.ts";
+import { loadSkills, summarizeSkills } from "./core/skills.ts";
 import { HooksEngine, describeHooks } from "./core/hooks.ts";
+import { BackgroundManager } from "./core/background.ts";
+import { createBackgroundAgent } from "./core/background-agent.ts";
 import { loadMcpConfig, type McpServerConfig } from "./mcp/config.ts";
 import {
   defaultMcpConfigPath,
@@ -348,6 +346,34 @@ async function main(): Promise<void> {
     },
   });
 
+  const background = await BackgroundManager.load({
+    createAgent: async ({ cwd, model: jobModel, mode, title }) => {
+      const instructions = await loadProjectInstructions(cwd);
+      return createBackgroundAgent({
+        provider,
+        tools: [...allTools, ...(mcp?.tools ?? [])],
+        system: `${buildSystemPrompt(cwd, instructions)}\n\n${agentCatalogPrompt(agentDefinitions)}`,
+        cwd,
+        model: jobModel,
+        mode,
+        agentDefinitions,
+        skills,
+        hooks,
+        onEvent: (event) => {
+          if (event.type === "error") {
+            stream?.send("background_event", {
+              title,
+              message: event.message,
+            });
+          }
+        },
+      });
+    },
+    onEvent: (event) => {
+      stream?.send("background_event", { event });
+    },
+  });
+
   const statePayload = () => ({
     model: agent.model,
     mode: permissions.mode,
@@ -396,7 +422,7 @@ async function main(): Promise<void> {
             },
           })
         : undefined;
-    agent.tools = [...allTools, ...(mcp?.tools ?? [])];
+    agent.setTools([...allTools, ...(mcp?.tools ?? [])]);
   };
 
   const here = path.dirname(fileURLToPath(import.meta.url));
@@ -512,6 +538,14 @@ async function main(): Promise<void> {
 
       if (request.method === "GET" && url.pathname === "/api/hooks") {
         json(response, 200, { hooks: describeHooks(hooks) });
+        return;
+      }
+
+      if (request.method === "GET" && url.pathname === "/api/telemetry") {
+        json(response, 200, {
+          summary: agent.telemetry ? await agent.telemetry.summary() : null,
+          runs: agent.telemetry ? await agent.telemetry.list(20) : [],
+        });
         return;
       }
 
@@ -680,7 +714,7 @@ async function main(): Promise<void> {
         agent.agentDefinitions = agentDefinitions;
         agent.skills = skills;
         agent.hooks = hooks;
-        agent.system = withSkillCatalog(
+        agent.setSystem(
           `${buildSystemPrompt(directory, projectInstructions)}\n\n${agentCatalogPrompt(agentDefinitions)}`,
           skills,
         );
@@ -937,6 +971,125 @@ async function main(): Promise<void> {
         return;
       }
 
+      if (request.method === "GET" && url.pathname === "/api/background") {
+        json(response, 200, { state: await background.stateSnapshot() });
+        return;
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/background") {
+        const body = await readJson(request);
+        const prompt = typeof body.prompt === "string" ? body.prompt.trim() : "";
+        if (!prompt) {
+          json(response, 400, { error: "Missing background prompt." });
+          return;
+        }
+        const cwd =
+          typeof body.cwd === "string" && body.cwd
+            ? await assertDirectory(body.cwd)
+            : options.cwd;
+        const jobModel =
+          typeof body.model === "string" && body.model.trim()
+            ? body.model.trim()
+            : agent.model;
+        const mode =
+          typeof body.mode === "string" &&
+          PERMISSION_MODES.includes(body.mode as PermissionMode)
+            ? (body.mode as PermissionMode)
+            : permissions.mode;
+        const job = await background.dispatch({
+          prompt,
+          cwd,
+          model: jobModel,
+          mode,
+          title: typeof body.title === "string" ? body.title : undefined,
+        });
+        json(response, 200, { job, state: await background.stateSnapshot() });
+        return;
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/background/cancel") {
+        const body = await readJson(request);
+        const id = typeof body.id === "string" ? body.id : "";
+        if (!id) {
+          json(response, 400, { error: "Missing job id." });
+          return;
+        }
+        await background.cancel(id);
+        json(response, 200, { state: await background.stateSnapshot() });
+        return;
+      }
+
+      if (request.method === "GET" && url.pathname === "/api/background/transcript") {
+        const id = url.searchParams.get("id") ?? "";
+        json(response, 200, { messages: await background.transcript(id) });
+        return;
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/background/schedules") {
+        const body = await readJson(request);
+        const name = typeof body.name === "string" ? body.name.trim() : "";
+        const prompt = typeof body.prompt === "string" ? body.prompt.trim() : "";
+        const cron = typeof body.cron === "string" ? body.cron.trim() : "";
+        if (!name || !prompt || !cron) {
+          json(response, 400, { error: "Schedule needs name, prompt, and cron." });
+          return;
+        }
+        const cwd =
+          typeof body.cwd === "string" && body.cwd
+            ? await assertDirectory(body.cwd)
+            : options.cwd;
+        const jobModel =
+          typeof body.model === "string" && body.model.trim()
+            ? body.model.trim()
+            : agent.model;
+        const mode =
+          typeof body.mode === "string" &&
+          PERMISSION_MODES.includes(body.mode as PermissionMode)
+            ? (body.mode as PermissionMode)
+            : permissions.mode;
+        try {
+          const schedule = await background.addSchedule({
+            name,
+            prompt,
+            cron,
+            cwd,
+            model: jobModel,
+            mode,
+            enabled: body.enabled !== false,
+          });
+          json(response, 200, {
+            schedule,
+            state: await background.stateSnapshot(),
+          });
+        } catch (error) {
+          json(response, 400, {
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
+        return;
+      }
+
+      if (
+        request.method === "POST" &&
+        url.pathname === "/api/background/schedules/remove"
+      ) {
+        const body = await readJson(request);
+        const id = typeof body.id === "string" ? body.id : "";
+        if (!id) {
+          json(response, 400, { error: "Missing schedule id." });
+          return;
+        }
+        try {
+          await background.removeSchedule(id);
+          json(response, 200, { state: await background.stateSnapshot() });
+        } catch (error) {
+          json(response, 400, {
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
+        return;
+      }
+
       json(response, 404, { error: "Not found." });
     } catch (error) {
       if (!response.headersSent) {
@@ -956,6 +1109,8 @@ async function main(): Promise<void> {
   });
 
   const shutdown = async (): Promise<void> => {
+    await background.close();
+    await agent.close();
     server.close();
     await mcp?.close();
     process.exit(0);

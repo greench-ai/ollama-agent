@@ -4,13 +4,12 @@ Date: 2026-10-26
 Scope: multi-agent orchestration and adjacent features worth adding to a local
 Ollama coding client.
 
-> Implementation status (2026-10-26): Phase 1 (agent definitions), Phase 2
-> (team core with task board, mailboxes, background runs, transcripts, and
-> persistence), Phase 3 (git worktree isolation, diff review, serialized trial
-> merge + test gate, worktree cleanup), and Phase 4a (Skills with progressive
-> disclosure, file checkpoints/rewind, lifecycle hooks, whitespace-tolerant
-> edits) are implemented. Deferred tool loading, ACP, scheduled agents,
-> telemetry, and signing remain.
+> Implementation status (2026-10-26): Phases 1–4 are implemented: agent
+> definitions, team core, worktree isolation with a trial-merge/test gate,
+> Skills, checkpoints/rewind, lifecycle hooks, whitespace-tolerant edits,
+> deferred MCP tool loading, background jobs with cron schedules, an ACP v1
+> stdio server, telemetry, and a scripted eval harness. Code signing and
+> notarization remain.
 
 ## 1. Executive summary
 

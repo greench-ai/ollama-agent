@@ -31,7 +31,9 @@
     "release:linux": "npm run electron:build && electron-builder --linux AppImage deb --x64 --publish always",
     "test": "node --test test/*.test.ts",
     "typecheck": "tsc --noEmit",
-    "build:web": "esbuild web/highlight-src.js --bundle --format=iife --target=chrome120 --minify --outfile=web/prism.js"
+    "build:web": "esbuild web/highlight-src.js --bundle --format=iife --target=chrome120 --minify --outfile=web/prism.js",
+    "build:acp": "esbuild src/acp.ts --bundle --platform=node --format=esm --target=node20 --outfile=dist/acp.mjs",
+    "eval": "node scripts/eval.ts"
   },
   "build": {
     "appId": "dev.local.ollamaagent",
@@ -97,5 +99,9 @@
     "esbuild": "^0.28.2",
     "prismjs": "^1.30.0",
     "typescript": "^5.6.0"
+  },
+  "bin": {
+    "ollama-agent": "dist/cli.mjs",
+    "ollama-agent-acp": "dist/acp.mjs"
   }
 }

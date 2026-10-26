@@ -6,8 +6,9 @@ import {
   agentCatalogPrompt,
   loadAgentDefinitions,
 } from "./core/agent-definitions.ts";
-import { loadSkills, withSkillCatalog } from "./core/skills.ts";
+import { loadSkills } from "./core/skills.ts";
 import { HooksEngine, describeHooks } from "./core/hooks.ts";
+import { formatTelemetry } from "./core/telemetry.ts";
 import { MAX_IMAGE_BYTES, loadImageAttachment } from "./core/images.ts";
 import { MAX_ATTACHMENTS, readFileAttachment } from "./core/files.ts";
 import type { FileAttachment, ImageAttachment } from "./core/types.ts";
@@ -154,6 +155,7 @@ Slash commands
   /skill <name>            print a loaded skill
   /rewind [list|<id|n>]    list or restore a file checkpoint
   /hooks                   reload and list lifecycle hooks
+  /telemetry [runs]        show this session's run telemetry
   /team [status|tasks|review <name> [--diff]|merge <name> [--skip-tests] [--cleanup] [--test <cmd>]|stop <name> [--remove-worktree]|message <name> <text>|transcript <name>]
   /image <path>  /images   (attach images to the next message)
   /file <path>   /files    (attach text/code/PDF files to the next message)
@@ -501,6 +503,22 @@ async function main(): Promise<void> {
           }
           break;
         }
+        case "telemetry": {
+          if (!agent.telemetry) {
+            console.log(style.dim("telemetry is disabled"));
+            break;
+          }
+          const summary = await agent.telemetry.summary();
+          console.log(
+            `${summary.runs} run(s) · ${summary.turns} turn(s) · ${summary.inputTokens} in / ${summary.outputTokens} out · ${summary.toolCalls} tool call(s) · ${summary.toolErrors} error(s) · ${Math.round(summary.durationMs / 1000)}s`,
+          );
+          if (rest[0] === "runs") {
+            for (const run of await agent.telemetry.list(20)) {
+              console.log(formatTelemetry(run));
+            }
+          }
+          break;
+        }
         case "hooks": {
           hooks = await HooksEngine.load(cwd);
           agent.hooks = hooks;
@@ -519,7 +537,7 @@ async function main(): Promise<void> {
         case "skills": {
           skills = await loadSkills(cwd);
           agent.skills = skills;
-          agent.system = withSkillCatalog(
+          agent.setSystem(
             `${systemPrompt(cwd)}\n\n${agentCatalogPrompt(agentDefinitions)}`,
             skills,
           );
@@ -565,7 +583,7 @@ async function main(): Promise<void> {
         case "agents": {
           agentDefinitions = await loadAgentDefinitions(cwd);
           agent.agentDefinitions = agentDefinitions;
-          agent.system = withSkillCatalog(
+          agent.setSystem(
             `${systemPrompt(cwd)}\n\n${agentCatalogPrompt(agentDefinitions)}`,
             agent.skills,
           );

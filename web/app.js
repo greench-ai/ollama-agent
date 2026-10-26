@@ -64,8 +64,20 @@
   const skillsList = $("skills-list");
   const checkpointsList = $("checkpoints-list");
   const checkpointReport = $("checkpoint-report");
+  const backgroundJobsEl = $("background-jobs");
+  const backgroundSchedulesEl = $("background-schedules");
+  const backgroundForm = $("background-form");
+  const backgroundPrompt = $("background-prompt");
+  const backgroundError = $("background-error");
+  const backgroundTranscript = $("background-transcript");
+  const backgroundTranscriptTitle = $("background-transcript-title");
+  const scheduleForm = $("schedule-form");
+  const scheduleName = $("schedule-name");
+  const scheduleCron = $("schedule-cron");
+  const schedulePrompt = $("schedule-prompt");
   const aboutVersion = $("about-version");
   const aboutInstructions = $("about-instructions");
+  const aboutTelemetry = $("about-telemetry");
   const aboutUpdateStatus = $("about-update-status");
   const updateCheck = $("update-check");
   const updateInstall = $("update-install");
@@ -1926,6 +1938,14 @@
     if (name === "connectors") void refreshConnectors();
     if (name === "agents") void refreshAgents();
     if (name === "rewind") void refreshCheckpoints();
+    if (name === "background") {
+      void refreshBackground();
+      if (state.backgroundPoll) clearInterval(state.backgroundPoll);
+      state.backgroundPoll = setInterval(() => void refreshBackground(), 2000);
+    } else if (state.backgroundPoll) {
+      clearInterval(state.backgroundPoll);
+      state.backgroundPoll = null;
+    }
     if (name === "about") fillAbout();
   }
 
@@ -2055,12 +2075,190 @@
     }
   }
 
+  function messagesToText(messages) {
+    const lines = [];
+    for (const message of messages || []) {
+      if (message.role === "user") {
+        const text = (message.content || [])
+          .filter((block) => block.type === "text")
+          .map((block) => block.text)
+          .join("\n")
+          .trim();
+        if (text) lines.push(`→ ${text}`);
+      } else if (message.role === "assistant") {
+        for (const block of message.content || []) {
+          if (block.type === "text" && block.text.trim()) lines.push(block.text.trim());
+          else if (block.type === "tool_use") lines.push(`[tool] ${block.name}`);
+        }
+      }
+    }
+    return lines.join("\n\n");
+  }
+
+  function renderBackground(state) {
+    backgroundJobsEl.innerHTML = "";
+    const jobs = [...(state.jobs || [])].reverse();
+    if (jobs.length === 0) {
+      backgroundJobsEl.appendChild(el("div", "artifacts-empty", "No background jobs yet."));
+    }
+    for (const job of jobs) {
+      const row = el("div", "connector");
+      const main = el("div", "connector-main");
+      const title = el("div", "connector-name");
+      title.appendChild(document.createTextNode(job.title));
+      const tone = job.status === "done" ? " ok" : job.status === "error" ? " bad" : "";
+      title.appendChild(el("span", `badge${tone}`, job.status));
+      main.appendChild(title);
+      const meta = [job.model, job.scheduleId ? "scheduled" : ""]
+        .filter(Boolean)
+        .join(" · ");
+      main.appendChild(el("div", "connector-sub", meta));
+      if (job.report) {
+        main.appendChild(el("div", "connector-sub", job.report.slice(0, 220)));
+      }
+      if (job.error) {
+        main.appendChild(el("div", "connector-error", job.error));
+      }
+      const actions = el("div", "team-member-actions");
+      const view = el("button", "", "View");
+      view.type = "button";
+      view.addEventListener("click", async () => {
+        try {
+          const data = await bridge.backgroundTranscript(job.id);
+          backgroundTranscript.hidden = false;
+          backgroundTranscriptTitle.textContent = `— ${job.title}`;
+          backgroundTranscript.textContent = messagesToText(data.messages) || "No transcript yet.";
+        } catch (error) {
+          addError(error instanceof Error ? error.message : String(error));
+        }
+      });
+      actions.appendChild(view);
+      if (job.status === "queued" || job.status === "running") {
+        const stop = el("button", "", "Stop");
+        stop.type = "button";
+        stop.addEventListener("click", async () => {
+          stop.disabled = true;
+          try {
+            await bridge.backgroundCancel(job.id);
+            await refreshBackground();
+          } catch (error) {
+            addError(error instanceof Error ? error.message : String(error));
+          }
+        });
+        actions.appendChild(stop);
+      }
+      row.appendChild(main);
+      row.appendChild(actions);
+      backgroundJobsEl.appendChild(row);
+    }
+
+    backgroundSchedulesEl.innerHTML = "";
+    const schedules = state.schedules || [];
+    if (schedules.length === 0) {
+      backgroundSchedulesEl.appendChild(
+        el("div", "artifacts-empty", "No schedules yet."),
+      );
+    }
+    for (const schedule of schedules) {
+      const row = el("div", "connector");
+      const main = el("div", "connector-main");
+      const title = el("div", "connector-name");
+      title.appendChild(document.createTextNode(schedule.name));
+      title.appendChild(el("span", `badge${schedule.enabled ? " ok" : ""}`, schedule.enabled ? "on" : "off"));
+      main.appendChild(title);
+      main.appendChild(el("div", "connector-sub", schedule.cron));
+      if (schedule.nextRunAt) {
+        main.appendChild(
+          el("div", "connector-sub", `next: ${new Date(schedule.nextRunAt).toLocaleString()}`),
+        );
+      }
+      const remove = el("button", "", "Remove");
+      remove.type = "button";
+      remove.addEventListener("click", async () => {
+        remove.disabled = true;
+        try {
+          await bridge.backgroundRemoveSchedule(schedule.id);
+          await refreshBackground();
+        } catch (error) {
+          addError(error instanceof Error ? error.message : String(error));
+        }
+      });
+      row.appendChild(main);
+      row.appendChild(remove);
+      backgroundSchedulesEl.appendChild(row);
+    }
+  }
+
+  async function refreshBackground() {
+    if (!bridge.backgroundState) return;
+    try {
+      const data = await bridge.backgroundState();
+      if (data.state) renderBackground(data.state);
+    } catch {
+      // Background status is best-effort.
+    }
+  }
+
+  if (backgroundForm) {
+    backgroundForm.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const prompt = backgroundPrompt.value.trim();
+      if (!prompt) return;
+      backgroundError.hidden = true;
+      try {
+        await bridge.backgroundDispatch(prompt);
+        backgroundPrompt.value = "";
+        await refreshBackground();
+        void refreshSessions();
+      } catch (error) {
+        backgroundError.hidden = false;
+        backgroundError.textContent =
+          error instanceof Error ? error.message : String(error);
+      }
+    });
+  }
+
+  if (scheduleForm) {
+    scheduleForm.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const name = scheduleName.value.trim();
+      const cron = scheduleCron.value.trim();
+      const prompt = schedulePrompt.value.trim();
+      if (!name || !cron || !prompt) return;
+      backgroundError.hidden = true;
+      try {
+        await bridge.backgroundAddSchedule({ name, prompt, cron });
+        scheduleName.value = "";
+        scheduleCron.value = "";
+        schedulePrompt.value = "";
+        await refreshBackground();
+      } catch (error) {
+        backgroundError.hidden = false;
+        backgroundError.textContent =
+          error instanceof Error ? error.message : String(error);
+      }
+    });
+  }
+
   function fillAbout() {
     aboutCwd.textContent = state.cwd || "—";
     aboutSession.textContent = state.sessionFile || "—";
     aboutMcp.textContent = state.mcpPath || "—";
     aboutVersion.textContent = state.version || "—";
     aboutInstructions.textContent = state.projectInstructions || "none";
+    if (aboutTelemetry && bridge.getTelemetry) {
+      void bridge
+        .getTelemetry()
+        .then((data) => {
+          const summary = data.summary;
+          aboutTelemetry.textContent = summary
+            ? `${summary.runs} run(s) · ${summary.turns} turn(s) · ${summary.inputTokens} in / ${summary.outputTokens} out · ${summary.toolCalls} tool call(s) · ${summary.toolErrors} error(s)`
+            : "disabled";
+        })
+        .catch(() => {
+          aboutTelemetry.textContent = "unavailable";
+        });
+    }
     void refreshUpdateStatus();
   }
 
@@ -2086,6 +2284,10 @@
   }
 
   function closeModal() {
+    if (state.backgroundPoll) {
+      clearInterval(state.backgroundPoll);
+      state.backgroundPoll = null;
+    }
     modal.hidden = true;
     backgroundInert(false);
     if (lastFocus && typeof lastFocus.focus === "function") {

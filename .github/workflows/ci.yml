@@ -21,7 +21,10 @@ jobs:
         run: npm run typecheck
       - name: Test
         run: npm test
+      - name: Eval
+        run: npm run eval
       - name: Bundle Electron and web
         run: |
           npm run electron:build
+          npm run build:acp
           npm run build:web
