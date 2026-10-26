@@ -20,8 +20,14 @@ import {
   toolsForMode,
   type PermissionMode,
 } from "./permissions.ts";
+import {
+  builtinAgentDefinitions,
+  type AgentDefinition,
+} from "./agent-definitions.ts";
 import { compactMessages, estimateMessages } from "./tokens.ts";
 import { Session } from "./session.ts";
+import { TeamManager, type TeamAgentEvent, type TeamEvent } from "./team.ts";
+import { memberTeamTools, TEAM_TOOL_NAMES } from "../tools/team.ts";
 
 export type AgentEvent =
   | { type: "text"; text: string }
@@ -33,6 +39,7 @@ export type AgentEvent =
   | { type: "turn_end" }
   | { type: "error"; message: string }
   | { type: "session_title"; title: string }
+  | { type: "team_event"; event: TeamEvent }
   | {
       type: "subagent_start";
       name: string;
@@ -71,6 +78,14 @@ export interface AgentOptions {
   planApprover?: (plan: string) => Promise<{ approved: boolean; feedback?: string }>;
   /** Mode applied when a plan is approved. Defaults to acceptEdits. */
   planApplyMode?: PermissionMode;
+  /** Agent definitions available to the Task tool. */
+  agentDefinitions?: Map<string, AgentDefinition>;
+  /** Existing team manager for teammate agents. */
+  team?: TeamManager;
+  teamRole?: "lead" | "member";
+  agentName?: string;
+  /** Lead agents create a team manager unless disabled. */
+  teamsEnabled?: boolean;
   onEvent?: (event: AgentEvent) => void;
 }
 
@@ -96,6 +111,11 @@ export class Agent {
   maxDepth: number;
   planApprover?: (plan: string) => Promise<{ approved: boolean; feedback?: string }>;
   planApplyMode: PermissionMode;
+  agentDefinitions: Map<string, AgentDefinition>;
+  team?: TeamManager;
+  teamRole: "lead" | "member";
+  agentName: string;
+  private teamsEnabled: boolean;
   private subagentCounter = 0;
   private onEvent: (event: AgentEvent) => void;
 
@@ -118,12 +138,98 @@ export class Agent {
     this.maxDepth = options.maxDepth ?? 1;
     this.planApprover = options.planApprover;
     this.planApplyMode = options.planApplyMode ?? "acceptEdits";
+    this.agentDefinitions = options.agentDefinitions ?? builtinAgentDefinitions();
     this.onEvent = options.onEvent ?? (() => {});
+    this.agentName = options.agentName ?? (this.depth === 0 ? "lead" : "agent");
+    this.teamRole = options.teamRole ?? "lead";
+    this.team = options.team;
+    this.teamsEnabled =
+      this.depth === 0 && this.teamRole === "lead" && options.teamsEnabled !== false;
+    if (!this.team && this.teamsEnabled) {
+      this.team = this.createTeamManager(this.session.id);
+    }
+
+    if (!this.team) {
+      this.tools = options.tools.filter((tool) => !TEAM_TOOL_NAMES.has(tool.name));
+    } else {
+      this.tools = options.tools;
+    }
   }
 
   private contextBudget(): number {
     const window = this.numCtx ?? 32_768;
     return Math.max(4_000, Math.floor(window * 0.75));
+  }
+
+  private createTeamManager(parentSessionId: string): TeamManager {
+    const baseTools = this.tools.filter((tool) => !TEAM_TOOL_NAMES.has(tool.name));
+    let manager: TeamManager | undefined;
+    manager = new TeamManager({
+      leadModel: this.model,
+      baseTools,
+      memberTools: memberTeamTools,
+      permissions: this.permissions,
+      cwd: this.cwd,
+      parentSessionId,
+      agentDefinitions: this.agentDefinitions,
+      onEvent: (event) => this.onEvent({ type: "team_event", event }),
+      createAgent: (config) =>
+        new Agent({
+          provider: this.provider,
+          model: config.model,
+          tools: config.tools,
+          permissions: config.permissions,
+          session: config.session,
+          cwd: this.cwd,
+          system: config.system,
+          think: false,
+          numCtx: this.numCtx,
+          temperature: this.temperature,
+          maxTurns: config.maxTurns,
+          maxToolResultChars: this.maxToolResultChars,
+          messages: config.messages,
+          depth: this.depth + 1,
+          maxDepth: this.maxDepth,
+          agentDefinitions: this.agentDefinitions,
+          team: manager,
+          teamRole: "member",
+          agentName: config.name,
+          onEvent: (event) => {
+            switch (event.type) {
+              case "text":
+                config.onEvent({ type: "text", text: event.text });
+                break;
+              case "thinking":
+                config.onEvent({ type: "thinking", text: event.text });
+                break;
+              case "tool_start":
+                config.onEvent({
+                  type: "tool_start",
+                  name: event.name,
+                  summary: event.summary,
+                });
+                break;
+              case "tool_end":
+                config.onEvent({
+                  type: "tool_end",
+                  name: event.name,
+                  content: event.content,
+                  isError: event.isError,
+                });
+                break;
+              case "error":
+                config.onEvent({ type: "error", message: event.message });
+                break;
+              case "turn_end":
+                config.onEvent({ type: "done" });
+                break;
+              default:
+                break;
+            }
+          },
+        }),
+    });
+    return manager;
   }
 
   async run(
@@ -295,6 +401,9 @@ export class Agent {
       log: (line) => this.onEvent({ type: "notice", text: line }),
       spawnSubagent: (request) => this.spawnSubagent(request),
       requestPlanApproval: (plan) => this.requestPlanApproval(plan),
+      team: this.team,
+      teamRole: this.teamRole,
+      agentName: this.agentName,
     };
 
     let content: string;
@@ -364,16 +473,54 @@ export class Agent {
       };
     }
 
-    const subagentType: SubagentType = request.subagentType ?? "general-purpose";
-    const readOnly = subagentType === "explore" || subagentType === "plan";
+    const subagentType = request.subagentType?.trim() || "general-purpose";
+    const definition = this.agentDefinitions.get(subagentType);
+    if (!definition) {
+      const available = [...this.agentDefinitions.keys()].sort().join(", ");
+      return {
+        content: `Unknown subagent type "${subagentType}". Available: ${available}.`,
+        isError: true,
+      };
+    }
+
     const rawName = request.name?.trim() || `sub-${this.subagentCounter + 1}`;
     this.subagentCounter += 1;
     const name = rawName.replace(/[^A-Za-z0-9._-]+/g, "-");
-    const model = request.model?.trim() || this.model;
+    const model =
+      request.model?.trim() ||
+      (definition.model && definition.model !== "inherit"
+        ? definition.model
+        : this.model);
 
-    const childTools = this.tools.filter(
-      (tool) => tool.name !== "Task" && (!readOnly || !tool.mutating),
+    let childTools = this.tools.filter(
+      (tool) =>
+        !TEAM_TOOL_NAMES.has(tool.name) &&
+        tool.name !== "Task" &&
+        tool.name !== "ExitPlanMode",
     );
+    if (definition.disallowedTools && definition.disallowedTools.length > 0) {
+      const denied = new Set(definition.disallowedTools.map(toolBaseName));
+      childTools = childTools.filter((tool) => !denied.has(tool.name));
+    }
+    if (definition.tools && definition.tools.length > 0) {
+      const allowed = new Set(definition.tools.map(toolBaseName));
+      childTools = childTools.filter((tool) => allowed.has(tool.name));
+    }
+
+    const childPermissions = this.permissions.fork(
+      definition.permissionMode ?? this.permissions.mode,
+    );
+    const readOnly = definition.permissionMode === "plan";
+    const basePrompt =
+      definition.systemPrompt.trim() ||
+      `You are the ${definition.name} subagent described as: ${definition.description}`;
+    const system = `${basePrompt}\n\n${subagentRules(
+      this.cwd,
+      definition.name,
+      request.description,
+      readOnly,
+    )}`;
+
     const childSession = await Session.create({
       cwd: this.cwd,
       model,
@@ -384,7 +531,7 @@ export class Agent {
       type: "subagent_start",
       name,
       description: request.description,
-      subagentType,
+      subagentType: definition.name,
       model,
     });
 
@@ -392,17 +539,19 @@ export class Agent {
       provider: this.provider,
       model,
       tools: childTools,
-      permissions: this.permissions,
+      permissions: childPermissions,
       session: childSession,
       cwd: this.cwd,
-      system: subagentSystemPrompt(this.cwd, subagentType, request.description),
+      system,
       think: false,
       numCtx: this.numCtx,
       temperature: this.temperature,
-      maxTurns: request.maxTurns ?? 25,
+      maxTurns: request.maxTurns ?? definition.maxTurns ?? 25,
       maxToolResultChars: this.maxToolResultChars,
       depth: this.depth + 1,
       maxDepth: this.maxDepth,
+      teamsEnabled: false,
+      agentName: name,
       onEvent: (event) => {
         if (event.type === "tool_start") {
           this.onEvent({
@@ -422,7 +571,7 @@ export class Agent {
         type: "subagent_end",
         name,
         description: request.description,
-        subagentType,
+        subagentType: definition.name,
         ok: true,
         messages: child.messages.length,
       });
@@ -433,7 +582,7 @@ export class Agent {
         type: "subagent_end",
         name,
         description: request.description,
-        subagentType,
+        subagentType: definition.name,
         ok: false,
         messages: child.messages.length,
       });
@@ -454,9 +603,19 @@ export class Agent {
 
   /** Replace the active session and conversation (session switching). */
   restore(session: Session, messages: Message[]): void {
+    if (this.teamsEnabled) {
+      const previous = this.team;
+      this.team = this.createTeamManager(session.id);
+      void previous?.close();
+    }
     this.session = session;
     this.messages = [...messages];
     this.todos = [];
+  }
+
+  /** Stop background teammates owned by this lead. */
+  async close(): Promise<void> {
+    await this.team?.close();
   }
 }
 
@@ -473,19 +632,23 @@ function lastAssistantText(messages: Message[]): string {
   return "";
 }
 
-function subagentSystemPrompt(
+function toolBaseName(name: string): string {
+  return name.split("(")[0].trim();
+}
+
+function subagentRules(
   cwd: string,
-  type: SubagentType,
+  type: string,
   description: string,
+  readOnly: boolean,
 ): string {
-  const readOnly = type === "explore" || type === "plan";
-  return `You are a ${type} subagent launched by a coding agent, working on one delegated task.
+  return `You are the ${type} subagent, working on one delegated task.
 
 Task: ${description}
 
 Environment
 - Working directory: ${cwd}
-${readOnly ? "- Read-only: you may not modify files or run mutating commands.\n" : ""}
+${readOnly ? "- Read-only: do not modify files or run mutating commands.\n" : ""}
 Rules
 - Use absolute file paths.
 - Work autonomously; do not ask the user questions.

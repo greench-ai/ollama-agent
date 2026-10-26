@@ -46,6 +46,19 @@
 
     getSettings: () => fetch("/api/settings").then((response) => response.json()),
 
+    listAgents: () => fetch("/api/agents").then((response) => response.json()),
+
+    teamStatus: () => fetch("/api/team").then((response) => response.json()),
+
+    teamMessage: (to, text) => post("/api/team/message", { to, text }),
+
+    teamStop: (name) => post("/api/team/stop", { name }),
+
+    teamTranscript: (name) =>
+      fetch(`/api/team/transcript?name=${encodeURIComponent(name)}`).then(
+        (response) => response.json(),
+      ),
+
     updateSettings: (patch) => post("/api/settings", patch),
 
     mcpList: () => fetch("/api/mcp").then((response) => response.json()),

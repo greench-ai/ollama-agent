@@ -54,6 +54,8 @@ node dist/cli.mjs --model qwen3:8b
 /resource <server> <uri>   read an MCP resource
 /prompts                   list MCP prompts
 /prompt <server> <name>    run an MCP prompt
+/agents                    list subagent definitions
+/team status|tasks|message <name> <text>|stop <name>|transcript <name>
 /clear                     clear the conversation and staged images
 /session                   show the session file
 /exit                      quit
@@ -112,11 +114,10 @@ The `Task` tool launches a child agent with its own context, session file, and
 tool set. Only its final report returns to the parent, so intermediate output
 never consumes the main conversation.
 
-- `general-purpose` — all tools except `Task`
-- `explore` / `plan` — read-only tools only
+- `subagent_type` names an agent definition; built-ins are `general-purpose`,
+  `explore`, `plan`, `implementer`, `reviewer`, and `tester`
+- The definition controls tools, model, permission mode, and max turns
 - Nesting is capped at one level; a child never receives `Task`
-- The child inherits the permission mode (approvals still prompt) and the
-  parent's model unless `model` is set
 - Progress is surfaced as `subagent_start` / `subagent_end` events, plus a
   notice for each child tool call
 - Child transcripts are stored as `<parent-session>-<name>.jsonl`
@@ -124,6 +125,64 @@ never consumes the main conversation.
 ```
 Task(description: "Find auth code", prompt: "…", subagent_type: "explore", name: "scout")
 ```
+
+### Agent definitions
+
+Roles are Markdown files with YAML frontmatter, discovered from:
+
+- built-ins (compiled)
+- `~/.config/ollama-agent/agents/`
+- `.ollama-agent/agents/` and `.agents/agents/` in the project, walking up to
+  the git root (closest definition wins)
+
+Supported fields: `name` and `description` (required), `model` (or `inherit`),
+`tools`, `disallowedTools`, `permissionMode`, `maxTurns`, `isolation`,
+`background`. The body becomes the agent's system prompt. Unknown fields are
+ignored.
+
+```markdown
+---
+name: security-reviewer
+description: Reviews changes for security regressions
+tools: Read, Grep, Glob
+permissionMode: plan
+model: qwen3:8b
+---
+Review the change read-only. Report findings by severity with file paths.
+```
+
+`/agents` in the CLI, and Settings → Agents in the GUI, list the loaded
+definitions and their sources.
+
+## Teams
+
+The lead can create named teammates that share a task board and mailboxes.
+Teams are opt-in at the model level: the tools are available, and the lead
+decides when parallel work is worth the overhead.
+
+Lead tools: `TeamSpawn`, `TeamRun`, `TeamAwait`, `TeamTask`, `TeamMessage`,
+`TeamStatus`, `TeamShutdown`. Teammates receive only the task, message, and
+status tools.
+
+- Defaults: 6 members, 3 concurrent runs, 30 turns per member, 8 auto-message
+  turns per member.
+- `TeamSpawn` starts a role in the background; `TeamAwait` collects reports.
+- `TeamTask` supports create/list/claim/complete/block, task dependencies, and
+  file reservations. Claiming a task whose files overlap an in-progress task
+  fails, so overlapping work is serialized.
+- Messages to an idle teammate start a turn; busy teammates receive them after
+  the current run.
+- Team state persists per lead session at
+  `~/.local/share/ollama-agent/teams/<session>/team.json`. Tasks, mailboxes, and
+  runs survive restarts; members come back offline.
+- The GUI shows a Team button with members, tasks, transcripts, direct
+  messaging, and Stop.
+- CLI: `/team status`, `/team tasks`, `/team message <name> <text>`,
+  `/team stop <name>`, `/team transcript <name>`.
+
+Worktree isolation, diff review, and the trial-merge/test gate are the next
+phase. Until then teammates share the working directory; use task file
+reservations or separate checkouts.
 
 ## MCP servers
 
@@ -425,14 +484,15 @@ Early. Implemented: streaming, tool loop, permissions, sessions with a
 Claude-Desktop-style shell (sidebar, searchable history, rename/delete/resume,
 markdown rendering, stop button, themes), settings and connector management,
 project switching with project instructions, an artifact panel, an update
-checker, 8 built-in tools (including `Task` subagents with isolated context),
-image input (user image, text/code, and PDF attachments; Read on images, MCP
-image results), an MCP client
+checker, agent definitions (Markdown roles), a team core (task board, mailboxes,
+background teammate runs, transcripts, persistence), 8 built-in tools
+(including `Task` subagents), image/text/PDF input, an MCP client
 (stdio + Streamable HTTP; tools, resources, prompts, pagination, annotations,
 reconnect, OAuth authorization-code + PKCE with discovery and dynamic client
 registration), a local HTTP/SSE server with the same web client, an Electron
 shell with a sandboxed renderer, IPC approvals, plan-mode
 propose/approve/apply, CSP, window-state persistence, menus, Linux packaging
 (AppImage + deb), cross-platform CI packaging (Windows NSIS/zip, macOS dmg/zip
-x64 + arm64), and electron-updater wiring. Not yet: code
-signing/notarization.
+x64 + arm64), and electron-updater wiring. Not yet: worktree isolation and
+merge gates for teams, skills, checkpoints/rewind, hooks, ACP, scheduled
+agents, and code signing/notarization.

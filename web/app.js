@@ -60,6 +60,7 @@
   const aboutCwd = $("about-cwd");
   const aboutSession = $("about-session");
   const aboutMcp = $("about-mcp");
+  const agentsList = $("agents-list");
   const aboutVersion = $("about-version");
   const aboutInstructions = $("about-instructions");
   const aboutUpdateStatus = $("about-update-status");
@@ -73,6 +74,17 @@
   const artifactsClose = $("artifacts-close");
   const artifactsList = $("artifacts-list");
   const artifactsPreview = $("artifacts-preview");
+  const teamBtn = $("team-btn");
+  const teamCount = $("team-count");
+  const teamPanel = $("team-panel");
+  const teamClose = $("team-close");
+  const teamMembersEl = $("team-members");
+  const teamTasksEl = $("team-tasks");
+  const teamTranscriptEl = $("team-transcript");
+  const teamTranscriptTitle = $("team-transcript-title");
+  const teamMessageForm = $("team-message-form");
+  const teamMessageInput = $("team-message-input");
+  const teamMessageSend = $("team-message-send");
   const contextEl = $("context");
   const srStatus = $("sr-status");
   const dropOverlay = $("drop-overlay");
@@ -123,6 +135,10 @@
     artifacts: new Map(),
     artifactPath: null,
     updater: null,
+    team: null,
+    teamSelected: null,
+    teamTranscripts: new Map(),
+    teamPoll: null,
   };
 
   let current = null;
@@ -736,6 +752,9 @@
       case "update_status":
         renderUpdater(data);
         break;
+      case "team_event":
+        handleTeamEvent(data.event);
+        break;
       case "approval":
         announce(`Approval needed for ${data.tool}.`);
         addApproval(data);
@@ -1119,6 +1138,7 @@
         setHasChat(false);
       }
       await refreshSessions();
+      void refreshTeam();
     } catch (error) {
       addError(error instanceof Error ? error.message : String(error));
     }
@@ -1138,6 +1158,7 @@
       titleEl.textContent = state.title;
       renderHistory(data.messages || []);
       await refreshSessions();
+      void refreshTeam();
     } catch (error) {
       addError(error instanceof Error ? error.message : String(error));
     }
@@ -1162,6 +1183,7 @@
       renderPreviews();
       setHasChat(false);
       await refreshSessions();
+      void refreshTeam();
       input.focus();
     } catch (error) {
       addError(error instanceof Error ? error.message : String(error));
@@ -1414,6 +1436,7 @@
       renderPreviews();
       setHasChat(false);
       await refreshSessions();
+      void refreshTeam();
       input.focus();
     } catch (error) {
       addError(error instanceof Error ? error.message : String(error));
@@ -1446,6 +1469,7 @@
   }
 
   function setArtifactsOpen(open) {
+    if (open && teamPanel && !teamPanel.hidden) setTeamOpen(false);
     artifactsPanel.hidden = !open;
     document.body.classList.toggle("artifacts-open", open);
     if (open) renderArtifactList();
@@ -1495,6 +1519,242 @@
     renderArtifactList();
     updateArtifactsButton();
   }
+
+  /* ---------- team ---------- */
+
+  function setTeamOpen(open) {
+    if (open && !artifactsPanel.hidden) setArtifactsOpen(false);
+    teamPanel.hidden = !open;
+    document.body.classList.toggle("team-open", open);
+    if (open) {
+      renderTeam();
+      if (state.teamPoll) clearInterval(state.teamPoll);
+      state.teamPoll = setInterval(() => {
+        void refreshTeam();
+      }, 1800);
+    } else if (state.teamPoll) {
+      clearInterval(state.teamPoll);
+      state.teamPoll = null;
+    }
+  }
+
+  async function refreshTeam() {
+    try {
+      const data = await bridge.teamStatus();
+      if (data && data.team) {
+        state.team = data.team;
+        renderTeam();
+      }
+    } catch {
+      // Team status is best-effort.
+    }
+  }
+
+  function renderTeam() {
+    const team = state.team;
+    const members = team ? team.members : [];
+    teamCount.textContent = String(members.length);
+    teamBtn.hidden = members.length === 0;
+    teamMembersEl.innerHTML = "";
+    teamTasksEl.innerHTML = "";
+    if (!team || members.length === 0) {
+      state.teamSelected = null;
+      teamTranscriptTitle.textContent = "Transcript";
+      teamTranscriptEl.textContent = "Select a teammate.";
+      teamMessageInput.placeholder = "Message selected teammate…";
+      teamMembersEl.appendChild(
+        el("div", "artifacts-empty", "No team yet. Ask the lead to spawn teammates."),
+      );
+      return;
+    }
+
+    for (const member of members) {
+      const row = el(
+        "div",
+        `team-member${member.name === state.teamSelected ? " selected" : ""}`,
+      );
+      row.appendChild(el("span", `team-dot ${member.status}`, ""));
+      const main = el("div", "team-member-main");
+      main.appendChild(el("div", "team-member-name", member.name));
+      const task = (team.tasks || []).find((entry) => entry.id === member.currentTaskId);
+      const sub = [
+        member.role,
+        member.model,
+        member.status,
+        task ? `· ${task.title}` : "",
+      ]
+        .filter(Boolean)
+        .join(" · ");
+      main.appendChild(el("div", "team-member-sub", sub));
+      row.appendChild(main);
+
+      const actions = el("div", "team-member-actions");
+      const view = el("button", "", "View");
+      view.type = "button";
+      view.addEventListener("click", (event) => {
+        event.stopPropagation();
+        void selectTeamMember(member.name);
+      });
+      actions.appendChild(view);
+      if (member.status !== "offline") {
+        const stop = el("button", "", "Stop");
+        stop.type = "button";
+        stop.addEventListener("click", async (event) => {
+          event.stopPropagation();
+          stop.disabled = true;
+          try {
+            const data = await bridge.teamStop(member.name);
+            if (data.team) {
+              state.team = data.team;
+              renderTeam();
+            }
+          } catch (error) {
+            addError(error instanceof Error ? error.message : String(error));
+          }
+        });
+        actions.appendChild(stop);
+      }
+      row.appendChild(actions);
+      row.addEventListener("click", () => void selectTeamMember(member.name));
+      teamMembersEl.appendChild(row);
+    }
+
+    const tasks = team.tasks || [];
+    if (tasks.length === 0) {
+      teamTasksEl.appendChild(el("div", "artifacts-empty", "No tasks."));
+    }
+    for (const task of tasks) {
+      const row = el("div", "team-task");
+      const tone =
+        task.status === "completed" ? " ok" : task.status === "blocked" ? " bad" : "";
+      row.appendChild(el("span", `badge${tone}`, task.status));
+      row.appendChild(el("span", "", task.title));
+      if (task.assignee) {
+        row.appendChild(el("span", "team-member-sub", `@${task.assignee}`));
+      }
+      teamTasksEl.appendChild(row);
+    }
+  }
+
+  async function selectTeamMember(name) {
+    state.teamSelected = name;
+    teamTranscriptTitle.textContent = `Transcript — ${name}`;
+    teamMessageInput.placeholder = `Message ${name}…`;
+    renderTeam();
+    await refreshTeamTranscript(name);
+  }
+
+  async function refreshTeamTranscript(name) {
+    try {
+      const data = await bridge.teamTranscript(name);
+      const text = formatTeamMessages(data.messages || []);
+      state.teamTranscripts.set(name, text);
+      if (state.teamSelected === name) {
+        teamTranscriptEl.textContent = text || "(no transcript yet)";
+        teamTranscriptEl.scrollTop = teamTranscriptEl.scrollHeight;
+      }
+    } catch (error) {
+      state.teamTranscripts.set(
+        name,
+        error instanceof Error ? error.message : String(error),
+      );
+    }
+  }
+
+  function formatTeamMessages(messages) {
+    const parts = [];
+    for (const message of messages) {
+      if (message.role === "user") {
+        const text = message.content
+          .filter((block) => block.type === "text")
+          .map((block) => block.text)
+          .join("\n")
+          .trim();
+        if (text) parts.push(`→ ${text}`);
+      } else if (message.role === "assistant") {
+        for (const block of message.content) {
+          if (block.type === "text" && block.text.trim()) {
+            parts.push(block.text.trim());
+          } else if (block.type === "tool_use") {
+            parts.push(`[tool] ${block.name}`);
+          }
+        }
+      }
+    }
+    return parts.join("\n\n");
+  }
+
+  function handleTeamEvent(event) {
+    if (!event || typeof event !== "object") return;
+    if (event.type === "team_state") {
+      const previous = state.teamStatuses || new Map();
+      state.teamStatuses = new Map(
+        (event.state.members || []).map((member) => [member.name, member.status]),
+      );
+      state.team = event.state;
+      renderTeam();
+      if (state.teamSelected) {
+        const before = previous.get(state.teamSelected);
+        const after = state.teamStatuses.get(state.teamSelected);
+        if (before === "running" && after && after !== "running") {
+          void refreshTeamTranscript(state.teamSelected);
+        }
+        if (!after) {
+          state.teamSelected = null;
+          teamTranscriptTitle.textContent = "Transcript";
+          teamTranscriptEl.textContent = "Select a teammate.";
+        }
+      }
+      return;
+    }
+    if (event.type === "notice") {
+      addNotice(event.text);
+      return;
+    }
+    if (event.type !== "stream") return;
+
+    const name = event.agent;
+    let buffer = state.teamTranscripts.get(name) || "";
+    if (event.kind === "text") buffer += event.text || "";
+    else if (event.kind === "tool_start") {
+      buffer += `\n[${event.name}${event.summary ? `: ${event.summary}` : ""}]\n`;
+    } else if (event.kind === "tool_end") {
+      buffer += `${(event.content || "").slice(0, 600)}${event.isError ? " [error]" : ""}\n`;
+    } else if (event.kind === "error") {
+      buffer += `\n[error] ${event.content || ""}\n`;
+    } else if (event.kind === "done") {
+      buffer += "\n";
+    }
+    state.teamTranscripts.set(name, buffer);
+    if (state.teamSelected === name && !teamPanel.hidden) {
+      teamTranscriptEl.textContent = buffer || "(no transcript yet)";
+      teamTranscriptEl.scrollTop = teamTranscriptEl.scrollHeight;
+    }
+  }
+
+  teamBtn.addEventListener("click", () => setTeamOpen(teamPanel.hidden));
+  teamClose.addEventListener("click", () => setTeamOpen(false));
+  teamMessageForm.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    if (!state.teamSelected) return;
+    const text = teamMessageInput.value.trim();
+    if (!text) return;
+    teamMessageSend.disabled = true;
+    try {
+      const data = await bridge.teamMessage(state.teamSelected, text);
+      if (data.team) {
+        state.team = data.team;
+        renderTeam();
+      }
+      teamMessageInput.value = "";
+      await refreshTeamTranscript(state.teamSelected);
+      setTeamOpen(true);
+    } catch (error) {
+      addError(error instanceof Error ? error.message : String(error));
+    } finally {
+      teamMessageSend.disabled = false;
+    }
+  });
 
   function renderUpdater(status) {
     if (!status || typeof status !== "object") return;
@@ -1639,7 +1899,45 @@
       panel.hidden = panel.dataset.panel !== name;
     }
     if (name === "connectors") void refreshConnectors();
+    if (name === "agents") void refreshAgents();
     if (name === "about") fillAbout();
+  }
+
+  async function refreshAgents() {
+    agentsList.innerHTML = "";
+    try {
+      const data = await bridge.listAgents();
+      for (const agent of data.agents || []) {
+        const row = el("div", "connector");
+        const main = el("div", "connector-main");
+        const title = el("div", "connector-name");
+        title.appendChild(document.createTextNode(agent.name));
+        title.appendChild(
+          el("span", `badge${agent.builtin ? "" : " ok"}`, agent.builtin ? "builtin" : "custom"),
+        );
+        main.appendChild(title);
+        main.appendChild(el("div", "connector-sub", agent.description));
+        const meta = [];
+        if (agent.model) meta.push(`model: ${agent.model}`);
+        if (agent.permissionMode) meta.push(`mode: ${agent.permissionMode}`);
+        if (agent.tools && agent.tools.length > 0) {
+          meta.push(`${agent.tools.length} tools`);
+        }
+        if (agent.isolation) meta.push(`isolation: ${agent.isolation}`);
+        if (meta.length > 0) {
+          main.appendChild(el("div", "connector-sub", meta.join(" · ")));
+        }
+        if (!agent.builtin) {
+          main.appendChild(el("div", "connector-sub", agent.source));
+        }
+        row.appendChild(main);
+        agentsList.appendChild(row);
+      }
+    } catch (error) {
+      agentsList.appendChild(
+        el("div", "connector-error", error instanceof Error ? error.message : String(error)),
+      );
+    }
   }
 
   function fillAbout() {
@@ -2132,6 +2430,7 @@
       addError(`Models unavailable: ${error instanceof Error ? error.message : error}`);
     }
     await refreshSessions();
+    void refreshTeam();
     input.focus();
   }
 

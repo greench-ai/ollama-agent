@@ -1,8 +1,6 @@
 import type { Tool, ToolResult } from "../core/types.ts";
 import { optionalString, requireString } from "./shared.ts";
 
-const TYPES = ["general-purpose", "explore", "plan"] as const;
-
 export const taskTool: Tool = {
   name: "Task",
   description:
@@ -10,8 +8,11 @@ export const taskTool: Tool = {
     "isolated context and return its final report. Use it for broad searches, " +
     "reviews, or investigations that would flood the main conversation with " +
     "intermediate output. The subagent cannot see this conversation, so the " +
-    "prompt must be complete. Use \"explore\" or \"plan\" for read-only work. " +
-    "Do not use it for a single file read or one command.",
+    "prompt must be complete. \"subagent_type\" names an agent definition; " +
+    "built-ins include general-purpose, explore, plan, implementer, reviewer, " +
+    "and tester, and project or user definitions can add more. Use explore, " +
+    "plan, or reviewer for read-only work. Do not use it for a single file " +
+    "read or one command.",
   mutating: false,
   inputSchema: {
     type: "object",
@@ -27,9 +28,9 @@ export const taskTool: Tool = {
       },
       subagent_type: {
         type: "string",
-        enum: [...TYPES],
         description:
-          "general-purpose (all tools), explore (read-only), or plan (read-only).",
+          "Agent definition name (default general-purpose). Built-ins: " +
+          "general-purpose, explore, plan, implementer, reviewer, tester.",
       },
       model: {
         type: "string",
@@ -54,16 +55,11 @@ export const taskTool: Tool = {
     const description = requireString(input, "description");
     const prompt = requireString(input, "prompt");
     const type = optionalString(input, "subagent_type") ?? "general-purpose";
-    if (!(TYPES as readonly string[]).includes(type)) {
-      throw new Error(
-        `subagent_type must be one of: ${TYPES.join(", ")} (got "${type}").`,
-      );
-    }
 
     const result = await ctx.spawnSubagent({
       description,
       prompt,
-      subagentType: type as (typeof TYPES)[number],
+      subagentType: type,
       model: optionalString(input, "model"),
       name: optionalString(input, "name"),
     });

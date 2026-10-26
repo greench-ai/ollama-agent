@@ -34,6 +34,11 @@ import {
   type ProjectInstructions,
 } from "./core/project.ts";
 import { checkForLatestRelease } from "./core/updates.ts";
+import {
+  agentCatalogPrompt,
+  loadAgentDefinitions,
+  summarizeAgentDefinitions,
+} from "./core/agent-definitions.ts";
 import { loadMcpConfig, type McpServerConfig } from "./mcp/config.ts";
 import {
   defaultMcpConfigPath,
@@ -260,6 +265,8 @@ async function main(): Promise<void> {
     options.modeProvided ? options.mode : settings.mode,
     ask,
   );
+  let agentDefinitions = await loadAgentDefinitions(options.cwd);
+
   const agent = new Agent({
     provider,
     model,
@@ -267,8 +274,9 @@ async function main(): Promise<void> {
     permissions,
     session,
     cwd: options.cwd,
-    system: buildSystemPrompt(options.cwd, projectInstructions),
+    system: `${buildSystemPrompt(options.cwd, projectInstructions)}\n\n${agentCatalogPrompt(agentDefinitions)}`,
     planApprover,
+    agentDefinitions,
     onEvent: (event: AgentEvent) => {
       if (!stream) return;
       switch (event.type) {
@@ -297,6 +305,9 @@ async function main(): Promise<void> {
           break;
         case "session_title":
           stream.send("session_title", { title: event.title });
+          break;
+        case "team_event":
+          stream.send("team_event", { event: event.event });
           break;
         case "subagent_start":
           stream.send("subagent_start", {
@@ -406,6 +417,63 @@ async function main(): Promise<void> {
 
       if (request.method === "GET" && url.pathname === "/api/state") {
         json(response, 200, statePayload());
+        return;
+      }
+
+      if (request.method === "GET" && url.pathname === "/api/team") {
+        json(response, 200, {
+          team: (await agent.team?.snapshot()) ?? null,
+        });
+        return;
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/team/message") {
+        if (!agent.team) {
+          json(response, 400, { error: "Team mode is not enabled." });
+          return;
+        }
+        const body = await readJson(request);
+        const to = typeof body.to === "string" ? body.to : "";
+        const text = typeof body.text === "string" ? body.text : "";
+        if (!to || !text.trim()) {
+          json(response, 400, { error: "Missing recipient or message." });
+          return;
+        }
+        await agent.team.sendMessage("user", to, text);
+        json(response, 200, { team: await agent.team.snapshot() });
+        return;
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/team/stop") {
+        if (!agent.team) {
+          json(response, 400, { error: "Team mode is not enabled." });
+          return;
+        }
+        const body = await readJson(request);
+        const name = typeof body.name === "string" ? body.name : "";
+        if (!name) {
+          json(response, 400, { error: "Missing teammate name." });
+          return;
+        }
+        await agent.team.shutdown("lead", name);
+        json(response, 200, { team: await agent.team.snapshot() });
+        return;
+      }
+
+      if (request.method === "GET" && url.pathname === "/api/team/transcript") {
+        if (!agent.team) {
+          json(response, 200, { messages: [] });
+          return;
+        }
+        const name = url.searchParams.get("name") ?? "";
+        json(response, 200, { messages: await agent.team.transcript(name) });
+        return;
+      }
+
+      if (request.method === "GET" && url.pathname === "/api/agents") {
+        json(response, 200, {
+          agents: summarizeAgentDefinitions(agentDefinitions),
+        });
         return;
       }
 
@@ -536,7 +604,9 @@ async function main(): Promise<void> {
         options.cwd = directory;
         agent.cwd = directory;
         projectInstructions = await loadProjectInstructions(directory);
-        agent.system = buildSystemPrompt(directory, projectInstructions);
+        agentDefinitions = await loadAgentDefinitions(directory);
+        agent.agentDefinitions = agentDefinitions;
+        agent.system = `${buildSystemPrompt(directory, projectInstructions)}\n\n${agentCatalogPrompt(agentDefinitions)}`;
 
         const next = await Session.create({ cwd: directory, model: agent.model });
         agent.restore(next, []);

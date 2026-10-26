@@ -64,9 +64,34 @@ export function summarizeToolInput(tool: string, input: Record<string, unknown>)
       return typeof input.description === "string" ? input.description : "";
     case "ExitPlanMode":
       return "proposed plan";
+    case "TeamSpawn": {
+      const name = typeof input.name === "string" ? input.name : "teammate";
+      const role = typeof input.role === "string" ? input.role : "";
+      return role ? `${name} (${role})` : name;
+    }
+    case "TeamRun":
+      return typeof input.name === "string" ? input.name : "";
+    case "TeamAwait":
+      return Array.isArray(input.names) ? input.names.join(", ") : "all active";
+    case "TeamTask": {
+      const action = typeof input.action === "string" ? input.action : "task";
+      const id = typeof input.taskId === "string" ? input.taskId : "";
+      const title = typeof input.title === "string" ? input.title : "";
+      return [action, id || title].filter(Boolean).join(" ");
+    }
+    case "TeamMessage": {
+      const to = typeof input.to === "string" ? input.to : "?";
+      const text = typeof input.text === "string" ? input.text : "";
+      return `to ${to}${text ? `: ${text.slice(0, 60)}` : ""}`;
+    }
+    case "TeamStatus":
+      return "";
+    case "TeamShutdown":
+      return typeof input.name === "string" ? input.name : "";
     default: {
       const first = Object.entries(input)[0];
       if (!first) return "";
+      if (first[1] === null || first[1] === undefined) return first[0];
       const value = typeof first[1] === "string" ? first[1] : JSON.stringify(first[1]);
       return `${first[0]}=${value}`.slice(0, 120);
     }
@@ -85,6 +110,13 @@ export class PermissionEngine {
 
   setMode(mode: PermissionMode): void {
     this.mode = mode;
+  }
+
+  /** Share approval state and the ask handler with a child in another mode. */
+  fork(mode: PermissionMode = this.mode): PermissionEngine {
+    const engine = new PermissionEngine(mode, this.ask);
+    for (const key of this.alwaysAllow) engine.alwaysAllow.add(key);
+    return engine;
   }
 
   async check(request: PermissionRequest): Promise<PermissionResult> {

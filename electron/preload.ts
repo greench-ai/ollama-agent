@@ -36,6 +36,18 @@ const bridge = {
 
   getSettings: () => ipcRenderer.invoke("settings:get"),
 
+  listAgents: () => ipcRenderer.invoke("agents:list"),
+
+  teamStatus: () => ipcRenderer.invoke("team:status"),
+
+  teamMessage: (to: string, text: string) =>
+    ipcRenderer.invoke("team:message", { to, text }),
+
+  teamStop: (name: string) => ipcRenderer.invoke("team:stop", { name }),
+
+  teamTranscript: (name: string) =>
+    ipcRenderer.invoke("team:transcript", { name }),
+
   updateSettings: (patch: {
     theme?: string;
     model?: string;

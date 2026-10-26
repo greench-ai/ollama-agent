@@ -2,6 +2,10 @@ import { createInterface } from "node:readline/promises";
 import process from "node:process";
 import path from "node:path";
 import { Agent } from "./core/agent.ts";
+import {
+  agentCatalogPrompt,
+  loadAgentDefinitions,
+} from "./core/agent-definitions.ts";
 import { MAX_IMAGE_BYTES, loadImageAttachment } from "./core/images.ts";
 import { MAX_ATTACHMENTS, readFileAttachment } from "./core/files.ts";
 import type { FileAttachment, ImageAttachment } from "./core/types.ts";
@@ -143,6 +147,8 @@ Options
 
 Slash commands
   /help  /models  /model <name>  /mode <mode>  /think [on|off]
+  /agents                  list subagent definitions
+  /team [status|tasks|stop <name>|message <name> <text>|transcript <name>]
   /image <path>  /images   (attach images to the next message)
   /file <path>   /files    (attach text/code/PDF files to the next message)
   /mcp [reconnect <server>]  /mcp logout <server>
@@ -336,6 +342,8 @@ async function main(): Promise<void> {
   };
 
   const permissions = new PermissionEngine(options.mode, ask);
+  let agentDefinitions = await loadAgentDefinitions(cwd);
+
   const agent = new Agent({
     provider,
     model,
@@ -343,11 +351,12 @@ async function main(): Promise<void> {
     permissions,
     session,
     cwd,
-    system: systemPrompt(cwd),
+    system: `${systemPrompt(cwd)}\n\n${agentCatalogPrompt(agentDefinitions)}`,
     think: options.think,
     numCtx: options.numCtx,
     messages: prior,
     planApprover,
+    agentDefinitions,
     onEvent: (event) => renderer.handle(event),
   });
 
@@ -434,6 +443,85 @@ async function main(): Promise<void> {
             console.log(style.red(error instanceof Error ? error.message : String(error)));
           }
           break;
+        case "agents": {
+          agentDefinitions = await loadAgentDefinitions(cwd);
+          agent.agentDefinitions = agentDefinitions;
+          for (const definition of [...agentDefinitions.values()].sort((a, b) =>
+            a.name.localeCompare(b.name),
+          )) {
+            const tags = [definition.builtin ? "builtin" : "custom"];
+            if (definition.model) tags.push(definition.model);
+            if (definition.permissionMode) tags.push(definition.permissionMode);
+            console.log(
+              `${style.bold(definition.name)} ${style.dim(`(${tags.join(" · ")})`)}`,
+            );
+            console.log(`  ${style.dim(definition.description)}`);
+          }
+          break;
+        }
+        case "team": {
+          if (!agent.team) {
+            console.log(style.dim("team mode is not available"));
+            break;
+          }
+          const subcommand = rest[0];
+          try {
+            if (!subcommand || subcommand === "status") {
+              console.log(await agent.team.statusText());
+            } else if (subcommand === "tasks") {
+              console.log(await agent.team.taskAction("lead", "list", {}));
+            } else if (subcommand === "message") {
+              const target = rest[1];
+              const text = rest.slice(2).join(" ").trim();
+              if (!target || !text) {
+                console.log(style.dim("usage: /team message <name> <text>"));
+                break;
+              }
+              console.log(await agent.team.sendMessage("user", target, text));
+            } else if (subcommand === "stop") {
+              const target = rest[1];
+              if (!target) {
+                console.log(style.dim("usage: /team stop <name>"));
+                break;
+              }
+              console.log(await agent.team.shutdown("lead", target));
+            } else if (subcommand === "transcript") {
+              const target = rest[1];
+              if (!target) {
+                console.log(style.dim("usage: /team transcript <name>"));
+                break;
+              }
+              const messages = await agent.team.transcript(target);
+              for (const message of messages) {
+                if (message.role === "user") {
+                  const text = message.content
+                    .filter((block) => block.type === "text")
+                    .map((block) => (block.type === "text" ? block.text : ""))
+                    .join("\n")
+                    .trim();
+                  if (text) console.log(style.dim(`→ ${text}`));
+                } else if (message.role === "assistant") {
+                  for (const block of message.content) {
+                    if (block.type === "text" && block.text.trim()) {
+                      console.log(block.text.trim());
+                    } else if (block.type === "tool_use") {
+                      console.log(style.dim(`[tool] ${block.name}`));
+                    }
+                  }
+                }
+              }
+            } else {
+              console.log(
+                style.dim(
+                  "usage: /team [status|tasks|stop <name>|message <name> <text>|transcript <name>]",
+                ),
+              );
+            }
+          } catch (error) {
+            console.log(style.red(error instanceof Error ? error.message : String(error)));
+          }
+          break;
+        }
         case "model": {
           const name = rest.join(" ").trim();
           if (name) {

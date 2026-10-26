@@ -36,6 +36,12 @@ import {
   type ProjectInstructions,
 } from "../src/core/project.ts";
 import { checkForLatestRelease } from "../src/core/updates.ts";
+import {
+  agentCatalogPrompt,
+  loadAgentDefinitions,
+  summarizeAgentDefinitions,
+  type AgentDefinition,
+} from "../src/core/agent-definitions.ts";
 import { loadMcpConfig, type McpServerConfig } from "../src/mcp/config.ts";
 import {
   defaultMcpConfigPath,
@@ -121,6 +127,7 @@ let session: Session;
 let settings: AppSettings;
 let mcpConfigPath: string;
 let projectInstructions: ProjectInstructions | undefined;
+let agentDefinitions: Map<string, AgentDefinition> = new Map();
 let mcp: McpManager | undefined;
 
 type UpdaterStateName =
@@ -288,6 +295,9 @@ function forwardAgentEvent(event: AgentEvent): void {
     case "session_title":
       sendEvent("session_title", { title: event.title });
       break;
+    case "team_event":
+      sendEvent("team_event", { event: event.event });
+      break;
     case "subagent_start":
       sendEvent("subagent_start", {
         name: event.name,
@@ -358,6 +368,7 @@ async function initCore(): Promise<void> {
     options.modeProvided ? options.mode : settings.mode,
     ask,
   );
+  agentDefinitions = await loadAgentDefinitions(options.cwd);
   agent = new Agent({
     provider,
     model,
@@ -365,8 +376,9 @@ async function initCore(): Promise<void> {
     permissions,
     session,
     cwd: options.cwd,
-    system: buildSystemPrompt(options.cwd, projectInstructions),
+    system: `${buildSystemPrompt(options.cwd, projectInstructions)}\n\n${agentCatalogPrompt(agentDefinitions)}`,
     planApprover,
+    agentDefinitions,
     onEvent: forwardAgentEvent,
   });
 }
@@ -378,6 +390,38 @@ function registerIpc(): void {
     models: await provider.listModels(),
     current: agent.model,
   }));
+
+  ipcMain.handle("agents:list", () => ({
+    agents: summarizeAgentDefinitions(agentDefinitions),
+  }));
+
+  ipcMain.handle("team:status", async () => ({
+    team: (await agent.team?.snapshot()) ?? null,
+  }));
+
+  ipcMain.handle("team:message", async (_event, payload: unknown) => {
+    if (!agent.team) throw new Error("Team mode is not enabled.");
+    const body = asRecord(payload);
+    const to = typeof body.to === "string" ? body.to : "";
+    const text = typeof body.text === "string" ? body.text : "";
+    if (!to || !text.trim()) throw new Error("Missing recipient or message.");
+    await agent.team.sendMessage("user", to, text);
+    return { team: await agent.team.snapshot() };
+  });
+
+  ipcMain.handle("team:stop", async (_event, payload: unknown) => {
+    if (!agent.team) throw new Error("Team mode is not enabled.");
+    const name = asRecord(payload).name;
+    if (typeof name !== "string" || !name) throw new Error("Missing teammate name.");
+    await agent.team.shutdown("lead", name);
+    return { team: await agent.team.snapshot() };
+  });
+
+  ipcMain.handle("team:transcript", async (_event, payload: unknown) => {
+    if (!agent.team) return { messages: [] };
+    const name = asRecord(payload).name;
+    return { messages: await agent.team.transcript(typeof name === "string" ? name : "") };
+  });
 
   ipcMain.handle(
     "agent:set-state",
@@ -646,7 +690,9 @@ function registerIpc(): void {
     options.cwd = directory;
     agent.cwd = directory;
     projectInstructions = await loadProjectInstructions(directory);
-    agent.system = buildSystemPrompt(directory, projectInstructions);
+    agentDefinitions = await loadAgentDefinitions(directory);
+    agent.agentDefinitions = agentDefinitions;
+    agent.system = `${buildSystemPrompt(directory, projectInstructions)}\n\n${agentCatalogPrompt(agentDefinitions)}`;
 
     const next = await Session.create({ cwd: directory, model: agent.model });
     agent.restore(next, []);
@@ -928,7 +974,7 @@ async function createWindow(): Promise<void> {
                 input.value = ${JSON.stringify(prompt)};
                 input.dispatchEvent(new Event("input", { bubbles: true }));
                 document.getElementById("composer").requestSubmit();
-                const deadline = Date.now() + 120000;
+                const deadline = Date.now() + 300000;
                 while ((window.__agentTurns || 0) <= before) {
                   if (Date.now() > deadline) {
                     return JSON.stringify({ timeout: true, events: window.__agentEventLog, errors: window.__agentErrors });
@@ -961,6 +1007,37 @@ async function createWindow(): Promise<void> {
             if (button) button.click();
           `);
           await new Promise((resolve) => setTimeout(resolve, 2500));
+        }
+        if (process.env.AGENT_SMOKE_TEAM) {
+          const teamState = await mainWindow?.webContents.executeJavaScript(`
+            (() => {
+              const button = document.getElementById("team-btn");
+              const panel = document.getElementById("team-panel");
+              const send = document.getElementById("send");
+              const stop = document.getElementById("stop");
+              const before = {
+                buttonHidden: button ? button.hidden : null,
+                panelHidden: panel ? panel.hidden : null,
+                running: stop ? !stop.hidden : null,
+                sendHidden: send ? send.hidden : null,
+              };
+              if (button) button.click();
+              const view = document.querySelector(".team-member-actions button");
+              if (view) view.click();
+              return JSON.stringify({
+                before,
+                after: {
+                  buttonHidden: button ? button.hidden : null,
+                  panelHidden: panel ? panel.hidden : null,
+                  panelDisplay: panel ? getComputedStyle(panel).display : null,
+                  members: document.querySelectorAll(".team-member").length,
+                  bodyClass: document.body.className,
+                },
+              });
+            })()
+          `);
+          console.log("[electron] team smoke:", teamState);
+          await new Promise((resolve) => setTimeout(resolve, 1000));
         }
         if (process.env.AGENT_SMOKE_ARTIFACTS) {
           await mainWindow?.webContents.executeJavaScript(`

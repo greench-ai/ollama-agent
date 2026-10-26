@@ -1,6 +1,8 @@
 // Shared types for the agent core.
 // Kept UI-agnostic so the same core can back a CLI and a desktop shell.
 
+import type { TeamController } from "./team.ts";
+
 export type JsonSchema = {
   type?: string;
   properties?: Record<string, unknown>;
@@ -97,9 +99,13 @@ export interface ToolContext {
   requestPlanApproval?: (
     plan: string,
   ) => Promise<{ approved: boolean; feedback?: string }>;
+  /** Team board, when the lead has teams enabled. */
+  team?: TeamController;
+  teamRole?: "lead" | "member";
+  agentName?: string;
 }
 
-export type SubagentType = "general-purpose" | "explore" | "plan";
+export type SubagentType = string;
 
 export interface SubagentRequest {
   description: string;

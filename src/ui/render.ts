@@ -116,6 +116,29 @@ export class TerminalRenderer {
         // The prompt itself was just echoed; no need to repeat the title.
         break;
 
+      case "team_event": {
+        const teamEvent = event.event;
+        if (teamEvent.type === "notice") {
+          this.ensureNewline();
+          process.stdout.write(`${style.yellow("•")} ${style.dim(teamEvent.text)}\n`);
+        } else if (teamEvent.type === "stream") {
+          if (teamEvent.kind === "tool_start") {
+            this.ensureNewline();
+            process.stdout.write(
+              style.dim(
+                `  [team:${teamEvent.agent}] ${teamEvent.name}${teamEvent.summary ? `: ${teamEvent.summary}` : ""}\n`,
+              ),
+            );
+          } else if (teamEvent.kind === "error") {
+            this.ensureNewline();
+            process.stdout.write(
+              `${style.red("✗")} ${style.dim(`[team:${teamEvent.agent}]`)} ${teamEvent.content ?? ""}\n`,
+            );
+          }
+        }
+        break;
+      }
+
       case "turn_end":
         this.ensureNewline();
         break;

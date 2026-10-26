@@ -8,6 +8,7 @@ import { grepTool } from "./grep.ts";
 import { todoTool } from "./todo.ts";
 import { taskTool } from "./task.ts";
 import { exitPlanModeTool } from "./exit-plan.ts";
+import { teamTools } from "./team.ts";
 
 export const allTools: Tool[] = [
   readTool,
@@ -20,6 +21,7 @@ export const allTools: Tool[] = [
   todoTool,
   taskTool,
   exitPlanModeTool,
+  ...teamTools,
 ];
 
 export function getTool(name: string): Tool | undefined {
@@ -37,4 +39,5 @@ export {
   todoTool,
   taskTool,
   exitPlanModeTool,
+  teamTools,
 };
