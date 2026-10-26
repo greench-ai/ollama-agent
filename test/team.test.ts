@@ -326,7 +326,8 @@ test("worktree isolation reviews and merges a teammate branch after tests pass",
 
   const member = (await manager.snapshot())?.members.find((entry) => entry.name === "impl");
   const notice = h.events.find(
-    (event) => event.type === "notice" && event.text.includes("shared tree"),
+    (event): event is Extract<TeamEvent, { type: "notice" }> =>
+      event.type === "notice" && event.text.includes("shared tree"),
   );
   assert.ok(
     member?.worktreePath,
