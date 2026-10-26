@@ -43,3 +43,27 @@ test("settings default, persist, and ignore invalid values", async () => {
   const cleared = await updateSettings({ model: "" });
   assert.equal(cleared.model, undefined);
 });
+
+test("custom themes persist and can be cleared", async () => {
+  process.env.OLLAMA_AGENT_HOME = await mkdtemp(path.join(tmpdir(), "agent-settings-theme-"));
+  const saved = await updateSettings({
+    theme: "custom",
+    customTheme: {
+      name: "Demo",
+      source: "pasted",
+      importedAt: new Date().toISOString(),
+      light: { bg: "#ffffff", text: "#111111" } as never,
+      dark: { bg: "#000000", text: "#eeeeee" } as never,
+    },
+  });
+  assert.equal(saved.theme, "custom");
+  assert.equal(saved.customTheme?.name, "Demo");
+  const reloaded = await loadSettings();
+  assert.equal(reloaded.theme, "custom");
+  assert.equal(reloaded.customTheme?.light.bg, "#ffffff");
+
+  const cleared = await updateSettings({ theme: "system", customTheme: null });
+  assert.equal(cleared.theme, "system");
+  assert.equal(cleared.customTheme, undefined);
+  assert.equal((await loadSettings()).customTheme, undefined);
+});

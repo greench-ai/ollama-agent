@@ -1,6 +1,5 @@
 import { app, BrowserWindow, Menu, dialog, ipcMain, session as electronSession } from "electron";
 import { autoUpdater } from "electron-updater";
-import type { MenuItemConstructorOptions } from "electron";
 import { randomUUID } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
@@ -22,7 +21,13 @@ import {
   loadSession,
   renameSession,
 } from "../src/core/sessions.ts";
-import { loadSettings, updateSettings, type AppSettings } from "../src/core/settings.ts";
+import {
+  loadSettings,
+  updateSettings,
+  type AppSettings,
+  type SettingsPatch,
+} from "../src/core/settings.ts";
+import { importTweakcnTheme } from "../src/core/theme.ts";
 import { readProjectFile } from "../src/core/files.ts";
 import {
   MAX_ATTACHMENTS,
@@ -236,6 +241,7 @@ function statePayload() {
     prompts: mcp?.prompts ?? [],
     settings: {
       theme: settings.theme,
+      customTheme: settings.customTheme,
       showThinking: settings.showThinking,
       model: settings.model,
       mode: settings.mode,
@@ -743,14 +749,33 @@ function registerIpc(): void {
 
   ipcMain.handle("settings:update", async (_event, payload: unknown) => {
     const body = asRecord(payload);
-    const patch: Partial<AppSettings> = {};
-    if (body.theme === "system" || body.theme === "light" || body.theme === "dark") {
+    const patch: SettingsPatch = {};
+    if (
+      body.theme === "system" ||
+      body.theme === "light" ||
+      body.theme === "dark" ||
+      body.theme === "custom"
+    ) {
       patch.theme = body.theme;
+    }
+    if (body.customTheme === null) patch.customTheme = null;
+    else if (body.customTheme && typeof body.customTheme === "object") {
+      patch.customTheme = body.customTheme as AppSettings["customTheme"];
     }
     if (typeof body.model === "string") patch.model = body.model;
     if (typeof body.mode === "string") patch.mode = body.mode as PermissionMode;
     if (typeof body.showThinking === "boolean") patch.showThinking = body.showThinking;
     settings = await updateSettings(patch);
+    return settings;
+  });
+
+  ipcMain.handle("theme:import", async (_event, payload: unknown) => {
+    const body = asRecord(payload);
+    const theme = await importTweakcnTheme({
+      url: typeof body.url === "string" ? body.url : undefined,
+      css: typeof body.css === "string" ? body.css : undefined,
+    });
+    settings = await updateSettings({ theme: "custom", customTheme: theme });
     return settings;
   });
 
@@ -970,55 +995,6 @@ function setupUpdater(): void {
     .catch((error) => {
       console.error(`[updater] check failed: ${error.message}`);
     });
-}
-
-function buildMenu(): void {
-  const template: MenuItemConstructorOptions[] = [
-    { label: "File", submenu: [{ role: "quit" }] },
-    {
-      label: "Edit",
-      submenu: [
-        { role: "undo" },
-        { role: "redo" },
-        { type: "separator" },
-        { role: "cut" },
-        { role: "copy" },
-        { role: "paste" },
-        { role: "selectAll" },
-      ],
-    },
-    {
-      label: "View",
-      submenu: [
-        { role: "reload" },
-        { role: "forceReload" },
-        { role: "toggleDevTools" },
-        { type: "separator" },
-        { role: "resetZoom" },
-        { role: "zoomIn" },
-        { role: "zoomOut" },
-        { type: "separator" },
-        { role: "togglefullscreen" },
-      ],
-    },
-    {
-      label: "Help",
-      submenu: [
-        {
-          label: "About ollama-agent",
-          click: () => {
-            void dialog.showMessageBox({
-              type: "info",
-              title: "ollama-agent",
-              message: `ollama-agent ${app.getVersion()}`,
-              detail: "Agentic coding client for Ollama local and cloud models.",
-            });
-          },
-        },
-      ],
-    },
-  ];
-  Menu.setApplicationMenu(Menu.buildFromTemplate(template));
 }
 
 async function createWindow(): Promise<void> {
@@ -1284,7 +1260,13 @@ if (!app.requestSingleInstanceLock()) {
     electronSession.defaultSession.setPermissionCheckHandler(() => false);
 
     registerIpc();
-    buildMenu();
+    if (process.platform === "darwin") {
+      Menu.setApplicationMenu(
+        Menu.buildFromTemplate([{ role: "appMenu" }, { role: "editMenu" }]),
+      );
+    } else {
+      Menu.setApplicationMenu(null);
+    }
     await createWindow();
     setupUpdater();
 

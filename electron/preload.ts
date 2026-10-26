@@ -81,10 +81,14 @@ const bridge = {
 
   updateSettings: (patch: {
     theme?: string;
+    customTheme?: unknown;
     model?: string;
     mode?: string;
     showThinking?: boolean;
   }) => ipcRenderer.invoke("settings:update", patch),
+
+  importTheme: (input: { url?: string; css?: string }) =>
+    ipcRenderer.invoke("theme:import", input),
 
   mcpList: () => ipcRenderer.invoke("mcp:list"),
 

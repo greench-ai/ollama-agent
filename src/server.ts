@@ -21,7 +21,13 @@ import {
   loadSession,
   renameSession,
 } from "./core/sessions.ts";
-import { loadSettings, updateSettings, type AppSettings } from "./core/settings.ts";
+import {
+  loadSettings,
+  updateSettings,
+  type AppSettings,
+  type SettingsPatch,
+} from "./core/settings.ts";
+import { importTweakcnTheme } from "./core/theme.ts";
 import { readProjectFile } from "./core/files.ts";
 import {
   MAX_ATTACHMENTS,
@@ -390,6 +396,7 @@ async function main(): Promise<void> {
     prompts: mcp?.prompts ?? [],
     settings: {
       theme: settings.theme,
+      customTheme: settings.customTheme,
       showThinking: settings.showThinking,
       model: settings.model,
       mode: settings.mode,
@@ -594,15 +601,44 @@ async function main(): Promise<void> {
 
       if (request.method === "POST" && url.pathname === "/api/settings") {
         const body = await readJson(request);
-        const patch: Partial<AppSettings> = {};
-        if (body.theme === "system" || body.theme === "light" || body.theme === "dark") {
+        const patch: SettingsPatch = {};
+        if (
+          body.theme === "system" ||
+          body.theme === "light" ||
+          body.theme === "dark" ||
+          body.theme === "custom"
+        ) {
           patch.theme = body.theme;
+        }
+        if (body.customTheme === null) patch.customTheme = null;
+        else if (body.customTheme && typeof body.customTheme === "object") {
+          patch.customTheme = body.customTheme as AppSettings["customTheme"];
         }
         if (typeof body.model === "string") patch.model = body.model;
         if (typeof body.mode === "string") patch.mode = body.mode as PermissionMode;
         if (typeof body.showThinking === "boolean") patch.showThinking = body.showThinking;
         settings = await updateSettings(patch);
         json(response, 200, settings);
+        return;
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/theme/import") {
+        const body = await readJson(request);
+        try {
+          const theme = await importTweakcnTheme({
+            url: typeof body.url === "string" ? body.url : undefined,
+            css: typeof body.css === "string" ? body.css : undefined,
+          });
+          settings = await updateSettings({
+            theme: "custom",
+            customTheme: theme,
+          });
+          json(response, 200, settings);
+        } catch (error) {
+          json(response, 400, {
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
         return;
       }
 

@@ -428,8 +428,9 @@ HTTP API:
 | POST | `/api/sessions/rename` | rename `{id, title}` |
 | POST | `/api/sessions/delete` | delete `{id}` |
 | POST | `/api/cancel` | abort the running turn |
-| GET | `/api/settings` | theme, default model/mode, show-thinking |
-| POST | `/api/settings` | update settings |
+| GET | `/api/settings` | theme (including custom tweakcn), default model/mode, show-thinking |
+| POST | `/api/settings` | update settings; `customTheme: null` clears it |
+| POST | `/api/theme/import` | import `{url}` or `{css}` from tweakcn |
 | GET | `/api/mcp` | connector config path, statuses, and raw configs |
 | POST | `/api/mcp/save` | add or update `{name, config}` |
 | POST | `/api/mcp/remove` | remove `{name}` |
@@ -473,7 +474,8 @@ The bundled client (`web/index.html`) is the desktop shell:
   settings
 - dialog focus trap, `aria-live` status announcements, and reduced-motion
   support
-- system/light/dark theme
+- system/light/dark themes plus tweakcn custom themes with automatic
+  light/dark palettes
 
 Session switching and cancellation work in both Electron (IPC) and browser
 (HTTP) modes.
@@ -577,22 +579,37 @@ Wine; the macOS zip builds unsigned; dmg and signing require macOS.
 - Single-instance lock; second launch focuses the existing window
 - Window bounds persisted under Electron's `userData` directory
 
-## Settings and connectors
+## Settings and MCP servers
 
-The Settings dialog (sidebar → Settings) has three tabs:
+The Settings dialog (sidebar → Settings) has General, MCP Servers, Agents,
+Rewind, Background, and About tabs. The `MCP: add servers` / `MCP n/n connected`
+footer is also a shortcut to the MCP Servers tab.
 
 - **General** — theme, default model, default permission mode, and whether
   reasoning is shown. Stored in `~/.local/share/ollama-agent/settings.json` and
   applied at startup and to new sessions. The header pickers change only the
   current session.
-- **Connectors** — add, edit, remove, reconnect, and sign out of MCP servers.
+- **MCP Servers** — add, edit, remove, reconnect, and sign out of MCP servers.
   Supports stdio (command, args, env, cwd) and HTTP (URL, headers, OAuth:
   none / discover / explicit endpoints). Changes are written to the active
   config file (its path is shown) with `${VAR}` templates preserved, then the
   MCP manager restarts so new tools are available on the next turn.
-- **About** — working directory, session file, and connector config path.
+- **Agents** — loaded subagent definitions and skills.
+- **Rewind** — file checkpoints for the current session.
+- **Background** — background jobs and cron schedules.
+- **About** — working directory, session file, MCP config path, telemetry, and updates.
 
-Connector changes are blocked while a turn is running.
+MCP changes are blocked while a turn is running.
+
+### Tweakcn themes
+
+In General, choose **Custom (tweakcn)** and either paste a share URL such as
+`https://tweakcn.com/themes/claude` or paste the CSS variables copied from the
+tweakcn editor. The app fetches the registry item (only tweakcn.com is allowed),
+maps its shadcn tokens to the app palette, and follows the operating system’s
+light/dark preference. Imported themes are stored in settings; Remove custom
+theme clears them. Theme values are sanitized and arbitrary CSS is never
+injected.
 
 ## Projects and artifacts
 

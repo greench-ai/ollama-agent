@@ -92,6 +92,8 @@
 
     updateSettings: (patch) => post("/api/settings", patch),
 
+    importTheme: (input) => post("/api/theme/import", input),
+
     mcpList: () => fetch("/api/mcp").then((response) => response.json()),
 
     mcpSave: (name, config) => post("/api/mcp/save", { name, config }),

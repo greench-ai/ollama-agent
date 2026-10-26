@@ -29,6 +29,13 @@
   const modal = $("modal");
   const modalClose = $("modal-close");
   const settingTheme = $("set-theme");
+  const customThemeName = $("custom-theme-name");
+  const themeUrl = $("theme-url");
+  const themeImport = $("theme-import");
+  const themeCss = $("theme-css");
+  const themeCssApply = $("theme-css-apply");
+  const themeRemove = $("theme-remove");
+  const themeError = $("theme-error");
   const settingModel = $("set-model");
   const settingMode = $("set-mode");
   const settingThinking = $("set-thinking");
@@ -332,13 +339,63 @@
 
   /* ---------- theme + sidebar ---------- */
 
-  const THEMES = ["system", "light", "dark"];
+  const customThemeStyle = document.createElement("style");
+  customThemeStyle.id = "custom-theme";
+  document.head.appendChild(customThemeStyle);
+
+  function themeOptions() {
+    return state.settings.customTheme
+      ? ["system", "light", "dark", "custom"]
+      : ["system", "light", "dark"];
+  }
+
+  function safeThemeValue(value) {
+    return typeof value === "string" &&
+      /^[A-Za-z0-9#%.,()\-\s/+]+$/.test(value) &&
+      !/url\(|expression\(|image-set\(/i.test(value)
+      ? value
+      : "";
+  }
+
+  function customThemeCss(theme) {
+    const vars = (palette) =>
+      Object.entries(palette || {})
+        .map(([key, value]) => {
+          const safe = safeThemeValue(value);
+          return safe ? `--${key}: ${safe};` : "";
+        })
+        .filter(Boolean)
+        .join("\n");
+    return `:root[data-theme="custom"] {\n${vars(theme.light)}\n}\n@media (prefers-color-scheme: dark) {\n  :root[data-theme="custom"] {\n${vars(theme.dark)}\n  }\n}`;
+  }
+
+  function applyCustomTheme(theme) {
+    state.settings.customTheme = theme || undefined;
+    customThemeStyle.textContent = theme ? customThemeCss(theme) : "";
+    updateCustomThemeControls();
+  }
+
+  function updateCustomThemeControls() {
+    const theme = state.settings.customTheme;
+    if (customThemeName) {
+      customThemeName.textContent = theme
+        ? `${theme.name}${theme.source && theme.source !== "Pasted CSS variables" ? ` · ${theme.source}` : ""}`
+        : "none";
+    }
+    if (themeRemove) themeRemove.disabled = !theme;
+  }
 
   function applyTheme(theme, persist = true) {
-    state.theme = THEMES.includes(theme) ? theme : "system";
+    if (theme === "custom" && !state.settings.customTheme) theme = "system";
+    state.theme = themeOptions().includes(theme) ? theme : "system";
     state.settings.theme = state.theme;
     document.documentElement.dataset.theme = state.theme;
-    themeBtn.textContent = `Theme: ${state.theme}`;
+    const name =
+      state.theme === "custom" && state.settings.customTheme
+        ? state.settings.customTheme.name.slice(0, 22)
+        : state.theme;
+    themeBtn.textContent = `Theme: ${name}`;
+    updateCustomThemeControls();
     try {
       localStorage.setItem("ollama-agent-theme", state.theme);
     } catch {
@@ -351,8 +408,9 @@
 
   applyTheme(localStorage.getItem("ollama-agent-theme") || "system", false);
   themeBtn.addEventListener("click", () => {
-    const index = THEMES.indexOf(state.theme);
-    applyTheme(THEMES[(index + 1) % THEMES.length], true);
+    const options = themeOptions();
+    const index = options.indexOf(state.theme);
+    applyTheme(options[(index + 1) % options.length], true);
   });
 
   function setCollapsed(collapsed) {
@@ -1379,6 +1437,7 @@
     }
     if (data.settings) {
       state.settings = { ...state.settings, ...data.settings };
+      applyCustomTheme(state.settings.customTheme);
       applyTheme(state.settings.theme, false);
     }
     if (data.cwd) {
@@ -1398,8 +1457,8 @@
 
   function updateMcp(servers) {
     if (!servers || servers.length === 0) {
-      mcpEl.textContent = "No MCP servers";
-      mcpEl.title = "";
+      mcpEl.textContent = "MCP: add servers";
+      mcpEl.title = "Manage MCP servers";
       return;
     }
     const ok = servers.filter((server) => server.ok).length;
@@ -2318,15 +2377,93 @@
     try {
       const settings = await bridge.getSettings();
       state.settings = { ...state.settings, ...settings };
+      applyCustomTheme(settings.customTheme);
       settingTheme.value = settings.theme || "system";
       settingMode.value = settings.mode || "default";
       settingThinking.checked = settings.showThinking !== false;
       populateSettingsModels(settings.model || "");
       settingsError.hidden = true;
+      updateCustomThemeControls();
     } catch (error) {
       settingsError.textContent = error instanceof Error ? error.message : String(error);
       settingsError.hidden = false;
     }
+  }
+
+  function showThemeError(message) {
+    if (!themeError) return;
+    themeError.hidden = !message;
+    themeError.textContent = message || "";
+  }
+
+  async function importTheme(input) {
+    showThemeError("");
+    themeImport.disabled = true;
+    themeCssApply.disabled = true;
+    if (themeImport) themeImport.textContent = "Importing…";
+    try {
+      const next = await bridge.importTheme(input);
+      state.settings = { ...state.settings, ...next };
+      applyCustomTheme(next.customTheme);
+      settingTheme.value = next.theme || "custom";
+      applyTheme(next.theme || "custom", false);
+    } catch (error) {
+      showThemeError(error instanceof Error ? error.message : String(error));
+    } finally {
+      themeImport.disabled = false;
+      themeCssApply.disabled = false;
+      if (themeImport) themeImport.textContent = "Import from URL";
+    }
+  }
+
+  if (themeImport) {
+    themeImport.addEventListener("click", () => {
+      const url = themeUrl.value.trim();
+      if (!url) {
+        showThemeError("Paste a tweakcn theme URL first.");
+        return;
+      }
+      void importTheme({ url });
+    });
+  }
+
+  if (themeCssApply) {
+    themeCssApply.addEventListener("click", () => {
+      const css = themeCss.value.trim();
+      if (!css) {
+        showThemeError("Paste the tweakcn CSS variables first.");
+        return;
+      }
+      void importTheme({ css });
+    });
+  }
+
+  if (themeRemove) {
+    themeRemove.addEventListener("click", async () => {
+      showThemeError("");
+      try {
+        const next = await bridge.updateSettings({
+          theme: "system",
+          customTheme: null,
+        });
+        state.settings = { ...state.settings, ...next };
+        applyCustomTheme(undefined);
+        settingTheme.value = "system";
+        applyTheme("system", false);
+      } catch (error) {
+        showThemeError(error instanceof Error ? error.message : String(error));
+      }
+    });
+  }
+
+  if (settingTheme) {
+    settingTheme.addEventListener("change", () => {
+      if (settingTheme.value === "custom" && !state.settings.customTheme) {
+        showThemeError("Import a tweakcn theme to use custom mode.");
+      } else {
+        showThemeError("");
+      }
+    });
   }
 
   settingsSave.addEventListener("click", async () => {
@@ -2340,6 +2477,8 @@
         showThinking: settingThinking.checked,
       });
       state.settings = { ...state.settings, ...next };
+      applyCustomTheme(next.customTheme);
+      settingTheme.value = next.theme || "system";
       applyTheme(next.theme || "system", false);
       closeModal();
     } catch (error) {
@@ -2509,7 +2648,7 @@
       ...Object.keys(configs),
     ]);
     if (names.size === 0) {
-      mcpListEl.appendChild(el("div", "empty-list", "No connectors configured."));
+      mcpListEl.appendChild(el("div", "empty-list", "No MCP servers configured."));
       return;
     }
 
@@ -2621,6 +2760,7 @@
   }
 
   settingsBtn.addEventListener("click", () => openModal("general"));
+  mcpEl.addEventListener("click", () => openModal("connectors"));
   modalClose.addEventListener("click", closeModal);
   modal.addEventListener("click", (event) => {
     if (event.target === modal) closeModal();
@@ -2687,7 +2827,7 @@
     mcpSave.textContent = "Saving…";
     try {
       const name = mcpName.value.trim();
-      if (!name) throw new Error("Connector name is required.");
+      if (!name) throw new Error("MCP server name is required.");
       const config = buildConnectorConfig();
       const data = await bridge.mcpSave(name, config);
       state.mcpData = data;
@@ -2727,6 +2867,7 @@
     try {
       const settings = await bridge.getSettings();
       state.settings = { ...state.settings, ...settings };
+      applyCustomTheme(settings.customTheme);
       applyTheme(settings.theme || "system", false);
     } catch {
       // Settings are optional; localStorage already applied a theme.

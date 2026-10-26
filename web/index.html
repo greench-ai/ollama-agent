@@ -218,7 +218,28 @@
         font-size: 13px;
       }
       .theme:hover { background: var(--surface); color: var(--text); }
-      .mcp-status { font-size: 12px; color: var(--muted); padding: 0 8px 2px; }
+      .mcp-status {
+        font: inherit;
+        font-size: 12px;
+        color: var(--muted);
+        width: 100%;
+        padding: 4px 8px;
+        border: 0;
+        border-radius: 7px;
+        background: transparent;
+        text-align: left;
+        cursor: pointer;
+      }
+      .mcp-status:hover { background: var(--surface); color: var(--text); }
+      .custom-theme-box {
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+        padding: 10px;
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        background: var(--surface);
+      }
 
       /* Main */
       .main {
@@ -1050,7 +1071,7 @@
       <div class="side-foot">
         <button class="theme" id="settings-btn">Settings</button>
         <button class="theme" id="theme">Theme: system</button>
-        <div class="mcp-status" id="mcp"></div>
+        <button class="mcp-status" id="mcp" type="button"></button>
       </div>
     </aside>
 
@@ -1153,7 +1174,7 @@
         </div>
         <div class="tabs">
           <button class="tab active" data-tab="general" type="button">General</button>
-          <button class="tab" data-tab="connectors" type="button">Connectors</button>
+          <button class="tab" data-tab="connectors" type="button">MCP Servers</button>
           <button class="tab" data-tab="agents" type="button">Agents</button>
           <button class="tab" data-tab="rewind" type="button">Rewind</button>
           <button class="tab" data-tab="background" type="button">Background</button>
@@ -1167,8 +1188,30 @@
               <option value="system">System</option>
               <option value="light">Light</option>
               <option value="dark">Dark</option>
+              <option value="custom">Custom (tweakcn)</option>
             </select>
           </label>
+          <div class="custom-theme-box">
+            <div class="hint">
+              Custom theme: <span id="custom-theme-name">none</span>
+            </div>
+            <label class="field">
+              <span>tweakcn theme URL</span>
+              <input id="theme-url" placeholder="https://tweakcn.com/themes/..." />
+            </label>
+            <div class="modal-actions">
+              <button id="theme-import" type="button">Import from URL</button>
+            </div>
+            <label class="field">
+              <span>Or paste tweakcn CSS variables</span>
+              <textarea id="theme-css" rows="4" placeholder=":root { --background: oklch(...); }&#10;.dark { --background: oklch(...); }"></textarea>
+            </label>
+            <div class="modal-actions">
+              <button id="theme-css-apply" type="button">Apply pasted CSS</button>
+              <button id="theme-remove" type="button">Remove custom theme</button>
+            </div>
+            <div class="notice error" id="theme-error" hidden></div>
+          </div>
           <label class="field">
             <span>Default model</span>
             <select id="set-model"></select>
@@ -1197,10 +1240,10 @@
         </div>
 
         <div class="tab-panels" data-panel="connectors" hidden>
-          <div class="hint" id="mcp-path">Loading connectors…</div>
+          <div class="hint" id="mcp-path">Loading MCP servers…</div>
           <div class="mcp-list" id="mcp-list"></div>
           <button class="new-chat" id="mcp-add" type="button">
-            <span class="plus">+</span> Add connector
+            <span class="plus">+</span> Add MCP server
           </button>
           <form class="mcp-form" id="mcp-form" hidden>
             <label class="field">
@@ -1282,7 +1325,7 @@
             <div class="notice error" id="mcp-error" hidden></div>
             <div class="modal-actions">
               <button type="button" id="mcp-cancel">Cancel</button>
-              <button type="submit" class="send" id="mcp-save">Save connector</button>
+              <button type="submit" class="send" id="mcp-save">Save server</button>
             </div>
           </form>
         </div>
@@ -1343,7 +1386,7 @@
           <div class="hint">Working directory: <span id="about-cwd"></span></div>
           <div class="hint">Project instructions: <span id="about-instructions"></span></div>
           <div class="hint">Session: <span id="about-session"></span></div>
-          <div class="hint">Connector config: <span id="about-mcp"></span></div>
+          <div class="hint">MCP config: <span id="about-mcp"></span></div>
           <div class="hint">Telemetry (this session): <span id="about-telemetry">—</span></div>
           <div class="notice" id="about-update-status"></div>
           <div class="modal-actions">
