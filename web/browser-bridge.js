@@ -59,6 +59,11 @@
         (response) => response.json(),
       ),
 
+    teamReview: (name, diff) =>
+      fetch(
+        `/api/team/review?name=${encodeURIComponent(name)}&diff=${diff ? "1" : "0"}`,
+      ).then((response) => response.json()),
+
     updateSettings: (patch) => post("/api/settings", patch),
 
     mcpList: () => fetch("/api/mcp").then((response) => response.json()),

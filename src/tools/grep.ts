@@ -3,6 +3,7 @@ import { readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import type { Tool, ToolResult } from "../core/types.ts";
 import {
+  assertWithinRoot,
   displayPath,
   globToRegExp,
   optionalNumber,
@@ -218,6 +219,7 @@ export const grepTool: Tool = {
     const target = optionalString(input, "path")
       ? path.resolve(ctx.cwd, optionalString(input, "path") as string)
       : ctx.cwd;
+    await assertWithinRoot(target, ctx.allowedRoot);
 
     const config: GrepConfig = {
       pattern,

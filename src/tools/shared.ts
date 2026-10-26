@@ -1,5 +1,5 @@
 import { constants } from "node:fs";
-import { access, stat } from "node:fs/promises";
+import { access, realpath, stat } from "node:fs/promises";
 import path from "node:path";
 
 export class ToolInputError extends Error {}
@@ -64,6 +64,57 @@ export async function isDirectory(target: string): Promise<boolean> {
 export function truncate(text: string, limit: number): string {
   if (text.length <= limit) return text;
   return `${text.slice(0, limit)}\n\n[truncated ${text.length - limit} chars]`;
+}
+
+function isInside(root: string, target: string): boolean {
+  const relative = path.relative(root, target);
+  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+}
+
+/**
+ * Confine a tool path to a workspace root. Used for worktree teammates so an
+ * absolute path cannot silently edit the lead checkout. Symlinks are resolved
+ * for the nearest existing ancestor.
+ */
+export async function assertWithinRoot(
+  target: string,
+  root: string | undefined,
+): Promise<void> {
+  if (!root) return;
+  let rootReal = path.resolve(root);
+  try {
+    rootReal = await realpath(root);
+  } catch {
+    // Keep the lexical root if it cannot be resolved.
+  }
+  const resolved = path.resolve(target);
+
+  let probe = resolved;
+  while (true) {
+    try {
+      const real = await realpath(probe);
+      const candidate =
+        probe === resolved
+          ? real
+          : path.join(real, path.relative(probe, resolved));
+      if (!isInside(rootReal, candidate)) {
+        throw new ToolInputError(
+          `Path "${target}" is outside the allowed workspace "${rootReal}".`,
+        );
+      }
+      return;
+    } catch (error) {
+      if (error instanceof ToolInputError) throw error;
+      const parent = path.dirname(probe);
+      if (parent === probe) break;
+      probe = parent;
+    }
+  }
+  if (!isInside(rootReal, resolved)) {
+    throw new ToolInputError(
+      `Path "${target}" is outside the allowed workspace "${rootReal}".`,
+    );
+  }
 }
 
 export function displayPath(target: string, cwd: string): string {

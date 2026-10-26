@@ -55,7 +55,7 @@ node dist/cli.mjs --model qwen3:8b
 /prompts                   list MCP prompts
 /prompt <server> <name>    run an MCP prompt
 /agents                    list subagent definitions
-/team status|tasks|message <name> <text>|stop <name>|transcript <name>
+/team status|tasks|review <name> [--diff]|merge <name> [--skip-tests] [--cleanup] [--test <cmd>]|stop <name> [--remove-worktree]|message <name> <text>|transcript <name>
 /clear                     clear the conversation and staged images
 /session                   show the session file
 /exit                      quit
@@ -161,8 +161,8 @@ Teams are opt-in at the model level: the tools are available, and the lead
 decides when parallel work is worth the overhead.
 
 Lead tools: `TeamSpawn`, `TeamRun`, `TeamAwait`, `TeamTask`, `TeamMessage`,
-`TeamStatus`, `TeamShutdown`. Teammates receive only the task, message, and
-status tools.
+`TeamStatus`, `TeamReview`, `TeamMerge`, `TeamShutdown`. Teammates receive only
+the task, message, and status tools.
 
 - Defaults: 6 members, 3 concurrent runs, 30 turns per member, 8 auto-message
   turns per member.
@@ -176,13 +176,43 @@ status tools.
   `~/.local/share/ollama-agent/teams/<session>/team.json`. Tasks, mailboxes, and
   runs survive restarts; members come back offline.
 - The GUI shows a Team button with members, tasks, transcripts, direct
-  messaging, and Stop.
-- CLI: `/team status`, `/team tasks`, `/team message <name> <text>`,
-  `/team stop <name>`, `/team transcript <name>`.
+  messaging, Review, and Stop.
+- CLI: `/team status`, `/team tasks`,
+  `/team review <name> [--diff]`,
+  `/team merge <name> [--skip-tests] [--cleanup] [--test <cmd>]`,
+  `/team message <name> <text>`, `/team stop <name> [--remove-worktree]`,
+  `/team transcript <name>`.
 
-Worktree isolation, diff review, and the trial-merge/test gate are the next
-phase. Until then teammates share the working directory; use task file
-reservations or separate checkouts.
+### Worktree isolation and the merge gate
+
+When git is available, definitions with `isolation: worktree` (the built-in
+`implementer`, or `TeamSpawn({isolation: "worktree"})`) run in a linked git
+worktree at `teams/<session>/worktrees/<name>-<id>` on branch
+`team/<session>-<name>`. The teammate's tools and shell use that directory.
+Teammates are told not to commit, merge, or push; changes wait for the lead.
+
+`TeamReview` shows the branch, base, commits ahead, working-tree status, diff
+stat, untracked files, and optionally the full diff.
+
+`TeamMerge` is a serialized gate:
+
+1. Refuses if the lead tree is dirty, a merge is in progress, or the teammate
+   is still running.
+2. Commits the worktree's changes on its branch.
+3. Trial-merges the branch into a scratch worktree based on the lead HEAD. A
+   conflict aborts; conflicts are never resolved by a model.
+4. Runs a test command in the trial checkout (auto-detected from package.json /
+   Cargo / Go / Make, or passed as `testCommand`). A failing test blocks the
+   merge and leaves the lead tree untouched.
+5. Merges the branch into the lead branch with a merge commit, then optionally
+   removes the worktree and branch (`cleanup`).
+
+Merges are serialized through the team lock. If the project is not a git
+repository with a commit, the teammate falls back to the shared tree and a
+notice is emitted; task file reservations still apply. File tools (`Read`,
+`Write`, `Edit`, `MultiEdit`, `Glob`, `Grep`) are confined to the worktree root
+for isolated teammates. Worktree isolation is not an OS sandbox: a teammate's
+`Bash` command can still reach paths outside its worktree.
 
 ## MCP servers
 
@@ -485,7 +515,8 @@ Claude-Desktop-style shell (sidebar, searchable history, rename/delete/resume,
 markdown rendering, stop button, themes), settings and connector management,
 project switching with project instructions, an artifact panel, an update
 checker, agent definitions (Markdown roles), a team core (task board, mailboxes,
-background teammate runs, transcripts, persistence), 8 built-in tools
+background teammate runs, transcripts, persistence), git worktree isolation with
+serialized trial-merge and test gates, 8 built-in tools
 (including `Task` subagents), image/text/PDF input, an MCP client
 (stdio + Streamable HTTP; tools, resources, prompts, pagination, annotations,
 reconnect, OAuth authorization-code + PKCE with discovery and dynamic client
@@ -493,6 +524,6 @@ registration), a local HTTP/SSE server with the same web client, an Electron
 shell with a sandboxed renderer, IPC approvals, plan-mode
 propose/approve/apply, CSP, window-state persistence, menus, Linux packaging
 (AppImage + deb), cross-platform CI packaging (Windows NSIS/zip, macOS dmg/zip
-x64 + arm64), and electron-updater wiring. Not yet: worktree isolation and
-merge gates for teams, skills, checkpoints/rewind, hooks, ACP, scheduled
-agents, and code signing/notarization.
+x64 + arm64), and electron-updater wiring. Not yet: skills,
+checkpoints/rewind, hooks, ACP, scheduled agents, and code
+signing/notarization.

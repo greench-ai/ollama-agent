@@ -11,10 +11,11 @@ import { todoTool } from "../src/tools/todo.ts";
 import { globTool } from "../src/tools/glob.ts";
 import { grepTool } from "../src/tools/grep.ts";
 
-function context(cwd: string): ToolContext {
+function context(cwd: string, allowedRoot?: string): ToolContext {
   const todos: TodoItem[] = [];
   return {
     cwd,
+    allowedRoot,
     sessionId: "test",
     signal: new AbortController().signal,
     todos,
@@ -117,4 +118,37 @@ test("Glob and Grep find a file and its content", async () => {
 
   const grepped = await grepTool.run({ pattern: "needle", output_mode: "content" }, ctx);
   assert.match(grepped.content, /needle/);
+});
+
+test("allowedRoot confines file tools to a worktree", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "agent-root-"));
+  const outside = await mkdtemp(path.join(tmpdir(), "agent-outside-"));
+  const ctx = context(root, root);
+  const outsideFile = path.join(outside, "secret.txt");
+  await writeFile(outsideFile, "secret\n", "utf8");
+
+  await assert.rejects(
+    () => writeTool.run({ file_path: path.join(outside, "new.txt"), content: "x" }, ctx),
+    /outside the allowed workspace/,
+  );
+  await assert.rejects(
+    () => readTool.run({ file_path: outsideFile }, ctx),
+    /outside the allowed workspace/,
+  );
+  await assert.rejects(
+    () => editTool.run({ file_path: outsideFile, old_string: "secret", new_string: "x" }, ctx),
+    /outside the allowed workspace/,
+  );
+  await assert.rejects(
+    () => globTool.run({ pattern: "*", path: outside }, ctx),
+    /outside the allowed workspace/,
+  );
+  await assert.rejects(
+    () => grepTool.run({ pattern: "secret", path: outside }, ctx),
+    /outside the allowed workspace/,
+  );
+
+  const inside = path.join(root, "ok.txt");
+  await writeTool.run({ file_path: inside, content: "ok" }, ctx);
+  assert.match((await readTool.run({ file_path: inside }, ctx)).content, /ok/);
 });

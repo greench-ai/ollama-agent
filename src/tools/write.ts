@@ -2,6 +2,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { Tool, ToolResult } from "../core/types.ts";
 import {
+  assertWithinRoot,
   requireAbsolutePath,
   requireString,
 } from "./shared.ts";
@@ -28,8 +29,9 @@ export const writeTool: Tool = {
     required: ["file_path", "content"],
   },
 
-  async run(input): Promise<ToolResult> {
+  async run(input, ctx): Promise<ToolResult> {
     const filePath = requireAbsolutePath(input);
+    await assertWithinRoot(filePath, ctx.allowedRoot);
     const content = requireString(input, "content");
     await mkdir(path.dirname(filePath), { recursive: true });
     await writeFile(filePath, content, "utf8");
@@ -66,8 +68,9 @@ export const multiEditTool: Tool = {
     required: ["file_path", "edits"],
   },
 
-  async run(input): Promise<ToolResult> {
+  async run(input, ctx): Promise<ToolResult> {
     const filePath = requireAbsolutePath(input);
+    await assertWithinRoot(filePath, ctx.allowedRoot);
     const rawEdits = input.edits;
     if (!Array.isArray(rawEdits) || rawEdits.length === 0) {
       throw new Error('"edits" must be a non-empty array.');

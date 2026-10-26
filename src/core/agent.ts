@@ -84,6 +84,8 @@ export interface AgentOptions {
   team?: TeamManager;
   teamRole?: "lead" | "member";
   agentName?: string;
+  /** Confine file tools to this root (worktree teammates). */
+  workspaceRoot?: string;
   /** Lead agents create a team manager unless disabled. */
   teamsEnabled?: boolean;
   onEvent?: (event: AgentEvent) => void;
@@ -115,6 +117,7 @@ export class Agent {
   team?: TeamManager;
   teamRole: "lead" | "member";
   agentName: string;
+  workspaceRoot?: string;
   private teamsEnabled: boolean;
   private subagentCounter = 0;
   private onEvent: (event: AgentEvent) => void;
@@ -141,6 +144,7 @@ export class Agent {
     this.agentDefinitions = options.agentDefinitions ?? builtinAgentDefinitions();
     this.onEvent = options.onEvent ?? (() => {});
     this.agentName = options.agentName ?? (this.depth === 0 ? "lead" : "agent");
+    this.workspaceRoot = options.workspaceRoot;
     this.teamRole = options.teamRole ?? "lead";
     this.team = options.team;
     this.teamsEnabled =
@@ -180,7 +184,8 @@ export class Agent {
           tools: config.tools,
           permissions: config.permissions,
           session: config.session,
-          cwd: this.cwd,
+          cwd: config.cwd ?? this.cwd,
+          workspaceRoot: config.workspaceRoot,
           system: config.system,
           think: false,
           numCtx: this.numCtx,
@@ -404,6 +409,7 @@ export class Agent {
       team: this.team,
       teamRole: this.teamRole,
       agentName: this.agentName,
+      allowedRoot: this.workspaceRoot,
     };
 
     let content: string;

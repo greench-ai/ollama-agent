@@ -103,6 +103,8 @@ export interface ToolContext {
   team?: TeamController;
   teamRole?: "lead" | "member";
   agentName?: string;
+  /** Confine file tools to this root (set for worktree teammates). */
+  allowedRoot?: string;
 }
 
 export type SubagentType = string;

@@ -3,6 +3,7 @@ import { stat } from "node:fs/promises";
 import path from "node:path";
 import type { Tool, ToolResult } from "../core/types.ts";
 import {
+  assertWithinRoot,
   displayPath,
   globToRegExp,
   optionalString,
@@ -39,6 +40,7 @@ export const globTool: Tool = {
     const pattern = requireString(input, "pattern");
     const rawPath = optionalString(input, "path");
     const root = rawPath ? path.resolve(ctx.cwd, rawPath) : ctx.cwd;
+    await assertWithinRoot(root, ctx.allowedRoot);
     const matcher = globToRegExp(pattern);
 
     let matched = await new Promise<string[]>((resolve) => {

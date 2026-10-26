@@ -54,6 +54,13 @@ const spawnTool: Tool = {
         type: "boolean",
         description: "Wait for the initial task to finish (default false).",
       },
+      isolation: {
+        type: "string",
+        enum: ["worktree", "none"],
+        description:
+          "Override the definition's isolation. worktree creates a git worktree " +
+          "on its own branch; none shares the lead's tree.",
+      },
     },
     required: ["name", "role"],
   },
@@ -64,12 +71,17 @@ const spawnTool: Tool = {
     const prompt = optionalString(input, "prompt");
     const model = optionalString(input, "model");
     const wait = input.wait === true;
+    const isolation =
+      input.isolation === "worktree" || input.isolation === "none"
+        ? input.isolation
+        : undefined;
     const message = await controller(ctx).spawn("lead", {
       name,
       role,
       prompt,
       model,
       wait,
+      isolation,
     });
     return { content: message };
   },
@@ -223,17 +235,115 @@ const statusTool: Tool = {
 const shutdownTool: Tool = {
   name: "TeamShutdown",
   description:
-    "Stop a teammate and mark it offline. Only the lead can shut down teammates.",
+    "Stop a teammate and mark it offline. Only the lead can shut down teammates. " +
+    "Set removeWorktree to discard its worktree and branch; otherwise they remain " +
+    "for review.",
   mutating: false,
   inputSchema: {
     type: "object",
-    properties: { name: { type: "string" } },
+    properties: {
+      name: { type: "string" },
+      removeWorktree: {
+        type: "boolean",
+        description: "Remove the worktree and branch after stopping (default false).",
+      },
+    },
     required: ["name"],
   },
   async run(input, ctx): Promise<ToolResult> {
     requireLead(ctx);
     const name = requireString(input, "name");
-    return { content: await controller(ctx).shutdown("lead", name) };
+    return {
+      content: await controller(ctx).shutdown("lead", name, {
+        removeWorktree: input.removeWorktree === true,
+      }),
+    };
+  },
+};
+
+const reviewTool: Tool = {
+  name: "TeamReview",
+  description:
+    "Review a teammate's worktree: branch, base, commits ahead, working-tree " +
+    "status, diff stat, and optionally the full diff. Read-only. Only the lead " +
+    "can review.",
+  mutating: false,
+  inputSchema: {
+    type: "object",
+    properties: {
+      name: { type: "string" },
+      diff: {
+        type: "boolean",
+        description: "Include the full diff (truncated). Default false.",
+      },
+      maxChars: {
+        type: "integer",
+        description: "Diff character cap (default 12000).",
+      },
+    },
+    required: ["name"],
+  },
+  async run(input, ctx): Promise<ToolResult> {
+    requireLead(ctx);
+    const name = requireString(input, "name");
+    const maxChars = optionalNumber(input, "maxChars");
+    return {
+      content: await controller(ctx).review("lead", name, {
+        diff: input.diff === true,
+        maxChars,
+      }),
+    };
+  },
+};
+
+const mergeTool: Tool = {
+  name: "TeamMerge",
+  description:
+    "Merge a teammate's worktree branch into the lead branch through a serialized " +
+    "gate: commits its changes, performs a trial merge in a scratch worktree, runs " +
+    "the project's test command, and merges only if the trial merge is clean and " +
+    "tests pass. Conflicts are never resolved automatically. The lead tree must " +
+    "be clean. Only the lead can merge.",
+  mutating: true,
+  inputSchema: {
+    type: "object",
+    properties: {
+      name: { type: "string" },
+      testCommand: {
+        type: "string",
+        description:
+          "Test command to run in the trial merge. Defaults to the detected " +
+          "package.json/Cargo/go/Make test command.",
+      },
+      skipTests: {
+        type: "boolean",
+        description:
+          "Skip tests (trial merge still runs). Use only when the project has no " +
+          "meaningful test command.",
+      },
+      cleanup: {
+        type: "boolean",
+        description:
+          "Remove the worktree and delete its branch after a successful merge.",
+      },
+      timeoutMs: {
+        type: "integer",
+        description: "Test timeout in milliseconds (default 300000).",
+      },
+    },
+    required: ["name"],
+  },
+  async run(input, ctx): Promise<ToolResult> {
+    requireLead(ctx);
+    const name = requireString(input, "name");
+    return {
+      content: await controller(ctx).merge("lead", name, {
+        testCommand: optionalString(input, "testCommand"),
+        skipTests: input.skipTests === true,
+        cleanup: input.cleanup === true,
+        timeoutMs: optionalNumber(input, "timeoutMs"),
+      }),
+    };
   },
 };
 
@@ -244,6 +354,8 @@ export const teamTools: Tool[] = [
   taskTool,
   messageTool,
   statusTool,
+  reviewTool,
+  mergeTool,
   shutdownTool,
 ];
 

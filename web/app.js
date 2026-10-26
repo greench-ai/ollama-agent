@@ -1581,6 +1581,7 @@
         member.role,
         member.model,
         member.status,
+        member.mergedAt ? "· merged" : member.worktreePath ? "· worktree" : "",
         task ? `· ${task.title}` : "",
       ]
         .filter(Boolean)
@@ -1596,6 +1597,27 @@
         void selectTeamMember(member.name);
       });
       actions.appendChild(view);
+      if (member.branch && member.worktreePath && bridge.teamReview) {
+        const review = el("button", "", "Review");
+        review.type = "button";
+        review.title = member.branch;
+        review.addEventListener("click", async (event) => {
+          event.stopPropagation();
+          review.disabled = true;
+          try {
+            const data = await bridge.teamReview(member.name, false);
+            state.teamSelected = member.name;
+            teamTranscriptTitle.textContent = `Review — ${member.name}`;
+            teamTranscriptEl.textContent = data.report || data.error || "No report.";
+            renderTeam();
+          } catch (error) {
+            addError(error instanceof Error ? error.message : String(error));
+          } finally {
+            review.disabled = false;
+          }
+        });
+        actions.appendChild(review);
+      }
       if (member.status !== "offline") {
         const stop = el("button", "", "Stop");
         stop.type = "button";

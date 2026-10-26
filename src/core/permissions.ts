@@ -86,8 +86,21 @@ export function summarizeToolInput(tool: string, input: Record<string, unknown>)
     }
     case "TeamStatus":
       return "";
-    case "TeamShutdown":
+    case "TeamReview":
       return typeof input.name === "string" ? input.name : "";
+    case "TeamMerge": {
+      const name = typeof input.name === "string" ? input.name : "";
+      const test = typeof input.testCommand === "string" ? input.testCommand : "";
+      const skip = input.skipTests === true ? "skip tests" : "";
+      return [name, test, skip].filter(Boolean).join(" · ");
+    }
+    case "TeamShutdown":
+      return [
+        typeof input.name === "string" ? input.name : "",
+        input.removeWorktree === true ? "remove worktree" : "",
+      ]
+        .filter(Boolean)
+        .join(" · ");
     default: {
       const first = Object.entries(input)[0];
       if (!first) return "";

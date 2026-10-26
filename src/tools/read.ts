@@ -8,6 +8,7 @@ import {
 } from "../core/images.ts";
 import {
   ToolInputError,
+  assertWithinRoot,
   optionalNumber,
   requireAbsolutePath,
   truncate,
@@ -50,6 +51,7 @@ export const readTool: Tool = {
 
   async run(input, ctx): Promise<ToolResult> {
     const filePath = requireAbsolutePath(input);
+    await assertWithinRoot(filePath, ctx.allowedRoot);
     let info;
     try {
       info = await stat(filePath);

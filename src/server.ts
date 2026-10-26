@@ -470,6 +470,23 @@ async function main(): Promise<void> {
         return;
       }
 
+      if (request.method === "GET" && url.pathname === "/api/team/review") {
+        if (!agent.team) {
+          json(response, 400, { error: "Team mode is not enabled." });
+          return;
+        }
+        const name = url.searchParams.get("name") ?? "";
+        if (!name) {
+          json(response, 400, { error: "Missing teammate name." });
+          return;
+        }
+        const report = await agent.team.review("lead", name, {
+          diff: url.searchParams.get("diff") === "1",
+        });
+        json(response, 200, { report });
+        return;
+      }
+
       if (request.method === "GET" && url.pathname === "/api/agents") {
         json(response, 200, {
           agents: summarizeAgentDefinitions(agentDefinitions),

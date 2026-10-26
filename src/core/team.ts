@@ -2,9 +2,16 @@ import { randomUUID } from "node:crypto";
 import { access, mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { AgentDefinition } from "./agent-definitions.ts";
-import type { PermissionEngine, PermissionMode } from "./permissions.ts";
+import type { PermissionEngine } from "./permissions.ts";
 import { Session, agentHome } from "./session.ts";
 import type { Message, Tool } from "./types.ts";
+import {
+  createTeamWorktree,
+  mergeTeamWorktree,
+  removeTeamWorktree,
+  reviewTeamWorktree,
+  type WorktreeRecord,
+} from "./worktree.ts";
 
 export type TeamMemberStatus = "idle" | "running" | "offline" | "error";
 export type TeamTaskStatus = "pending" | "in_progress" | "completed" | "blocked";
@@ -22,6 +29,14 @@ export interface TeamMember {
   currentRunId?: string;
   turns: number;
   error?: string;
+  isolation?: "worktree" | "none";
+  worktreePath?: string;
+  worktreeCwd?: string;
+  repoRoot?: string;
+  branch?: string;
+  baseCommit?: string;
+  mergedAt?: string;
+  mergeCommit?: string;
 }
 
 export interface TeamTask {
@@ -64,6 +79,8 @@ export interface TeamSettings {
   maxConcurrentRuns: number;
   maxTurns: number;
   maxAutoTurns: number;
+  testCommand?: string;
+  testTimeoutMs?: number;
 }
 
 export interface TeamState {
@@ -118,6 +135,8 @@ export interface TeamAgentConfig {
   session: Session;
   system: string;
   maxTurns: number;
+  cwd?: string;
+  workspaceRoot?: string;
   messages?: Message[];
   onEvent: (event: TeamAgentEvent) => void;
 }
@@ -155,18 +174,38 @@ export interface TeamController {
       prompt?: string;
       model?: string;
       wait?: boolean;
+      isolation?: "worktree" | "none";
     },
   ): Promise<string>;
   run(caller: string, name: string, prompt: string, wait?: boolean): Promise<string>;
   awaitMembers(names?: string[], timeoutMs?: number): Promise<string>;
   sendMessage(from: string, to: string, text: string): Promise<string>;
+  review(
+    caller: string,
+    name: string,
+    options?: { diff?: boolean; maxChars?: number },
+  ): Promise<string>;
+  merge(
+    caller: string,
+    name: string,
+    options?: {
+      testCommand?: string;
+      skipTests?: boolean;
+      cleanup?: boolean;
+      timeoutMs?: number;
+    },
+  ): Promise<string>;
   taskAction(
     caller: string,
     action: "create" | "list" | "claim" | "complete" | "block",
     input: Record<string, unknown>,
   ): Promise<string>;
   statusText(): Promise<string>;
-  shutdown(caller: string, name: string): Promise<string>;
+  shutdown(
+    caller: string,
+    name: string,
+    options?: { removeWorktree?: boolean },
+  ): Promise<string>;
   transcript(name: string): Promise<Message[]>;
   snapshot(): Promise<TeamStateSnapshot | null>;
 }
@@ -181,16 +220,33 @@ interface MemberRuntime {
   autoTurns: number;
 }
 
-const MEMBER_RULES = (team: string, name: string, role: string, cwd: string) => `
+const MEMBER_RULES = (
+  team: string,
+  name: string,
+  role: string,
+  cwd: string,
+  worktree?: WorktreeRecord,
+) => `
 Team: ${team}
 Member: ${name} (${role})
-Working directory: ${cwd}
+Working directory: ${cwd}${
+  worktree
+    ? `
+Worktree: ${worktree.path} (branch ${worktree.branch}, base ${worktree.baseCommit.slice(0, 12)})`
+    : ""
+}
 
 Team rules
 - Use TeamTask to list, claim, and complete shared tasks; use TeamMessage to talk to teammates; use TeamStatus to inspect the board.
 - You cannot spawn teammates or shut down the team.
 - Do not ask the user questions; work autonomously on the delegated task.
-- End each turn with a concise report of what you did, what you verified, and anything unresolved.`;
+- End each turn with a concise report of what you did, what you verified, and anything unresolved.${
+  worktree
+    ? `
+- Work only inside your worktree. Do not run git commit, git checkout, git merge, or git push; leave changes for the lead to review and merge.`
+    : `
+- You share the working directory with the lead and other teammates. Reserve paths with TeamTask before editing.`
+}`;
 
 function now(): string {
   return new Date().toISOString();
@@ -215,6 +271,24 @@ function toolBaseName(name: string): string {
 
 function sanitizeName(name: string): string {
   return name.trim().replace(/[^A-Za-z0-9._-]+/g, "-");
+}
+
+function memberWorktree(member: TeamMember): WorktreeRecord | undefined {
+  if (
+    !member.worktreePath ||
+    !member.repoRoot ||
+    !member.branch ||
+    !member.baseCommit
+  ) {
+    return undefined;
+  }
+  return {
+    path: member.worktreePath,
+    cwd: member.worktreeCwd ?? member.worktreePath,
+    repoRoot: member.repoRoot,
+    branch: member.branch,
+    baseCommit: member.baseCommit,
+  };
 }
 
 export class TeamManager implements TeamController {
@@ -371,6 +445,8 @@ export class TeamManager implements TeamController {
           `${member.name} (${member.role}, ${member.model}): ${member.status}`,
         ];
         if (task) bits.push(`task: ${task.id} ${task.title}`);
+        if (member.branch) bits.push(`worktree: ${member.branch}`);
+        if (member.mergedAt) bits.push("merged");
         if (lastRun?.report) bits.push(`last: ${lastRun.report.slice(0, 300)}`);
         if (member.error) bits.push(`error: ${member.error}`);
         lines.push(`- ${bits.join(" · ")}`);
@@ -449,11 +525,14 @@ export class TeamManager implements TeamController {
     const permissions = this.options.permissions.fork(
       definition.permissionMode ?? this.options.permissions.mode,
     );
+    const worktree = memberWorktree(member);
+    const memberCwd = worktree?.cwd ?? this.options.cwd;
     const system = `${definition.systemPrompt.trim()}\n\n${MEMBER_RULES(
       this.state?.name ?? "team",
       member.name,
       member.role,
-      this.options.cwd,
+      memberCwd,
+      worktree,
     )}`;
 
     runtime.agent = this.options.createAgent({
@@ -464,6 +543,8 @@ export class TeamManager implements TeamController {
       session,
       system,
       maxTurns: definition.maxTurns ?? this.state?.settings.maxTurns ?? 30,
+      cwd: memberCwd,
+      workspaceRoot: worktree?.path,
       messages: prior,
       onEvent: (event) => this.handleMemberEvent(member.name, event),
     });
@@ -649,6 +730,7 @@ export class TeamManager implements TeamController {
       prompt?: string;
       model?: string;
       wait?: boolean;
+      isolation?: "worktree" | "none";
     },
   ): Promise<string> {
     if (caller !== "lead") throw new Error("Only the lead can spawn teammates.");
@@ -671,6 +753,27 @@ export class TeamManager implements TeamController {
         ? definition.model
         : this.options.leadModel);
 
+    const wantedIsolation =
+      input.isolation ??
+      (definition.isolation === "worktree" ? "worktree" : "none");
+    let worktree: WorktreeRecord | undefined;
+    if (wantedIsolation === "worktree") {
+      const prepared = await createTeamWorktree({
+        leadCwd: this.options.cwd,
+        teamDir: this.teamDir,
+        sessionId: this.options.parentSessionId,
+        name,
+      });
+      if (prepared.record) {
+        worktree = prepared.record;
+      } else {
+        this.options.onEvent({
+          type: "notice",
+          text: `[team] ${name} is using the shared tree: ${prepared.reason ?? "worktree unavailable"}.`,
+        });
+      }
+    }
+
     const session = await Session.create({
       cwd: this.options.cwd,
       model,
@@ -685,29 +788,39 @@ export class TeamManager implements TeamController {
       sessionId: session.id,
       createdAt: now(),
       turns: 0,
+      isolation: worktree ? "worktree" : "none",
+      worktreePath: worktree?.path,
+      worktreeCwd: worktree?.cwd,
+      repoRoot: worktree?.repoRoot,
+      branch: worktree?.branch,
+      baseCommit: worktree?.baseCommit,
     };
     state.members.push(member);
     this.runtimes.set(name, { session, queued: [], autoTurns: 0 });
     await this.save();
     this.emitState();
 
+    const where = worktree
+      ? `\nWorktree: ${worktree.branch} (${worktree.path})`
+      : "";
     if (input.prompt?.trim()) {
       try {
         const runId = await this.startRun(member, input.prompt.trim());
         if (input.wait) {
           await this.awaitMembers([name]);
-          return `Spawned ${name} (${definition.name}) and awaited run ${runId}.\n\n${await this.statusText()}`;
+          return `Spawned ${name} (${definition.name}) and awaited run ${runId}.${where}\n\n${await this.statusText()}`;
         }
-        return `Spawned ${name} (${definition.name}) on model ${model}; run ${runId} started in the background. Use TeamAwait to collect it.`;
+        return `Spawned ${name} (${definition.name}) on model ${model}; run ${runId} started in the background. Use TeamAwait to collect it.${where}`;
       } catch (error) {
         state.members = state.members.filter((entry) => entry !== member);
         this.runtimes.delete(name);
+        if (worktree) await removeTeamWorktree(worktree);
         await this.save();
         this.emitState();
         throw error;
       }
     }
-    return `Spawned ${name} (${definition.name}) on model ${model}; it is idle. Use TeamRun to give it work.`;
+    return `Spawned ${name} (${definition.name}) on model ${model}; it is idle. Use TeamRun to give it work.${where}`;
   }
 
   async run(caller: string, name: string, prompt: string, wait = false): Promise<string> {
@@ -750,6 +863,76 @@ export class TeamManager implements TeamController {
       }
     }
     return this.statusText();
+  }
+
+  async review(
+    caller: string,
+    name: string,
+    options: { diff?: boolean; maxChars?: number } = {},
+  ): Promise<string> {
+    await this.ensureState();
+    const target = sanitizeName(name);
+    if (caller !== "lead" && caller !== target) {
+      throw new Error("A teammate can only review its own worktree.");
+    }
+    const member = this.findMember(target);
+    if (!member) throw new Error(`Unknown teammate "${name}".`);
+    const worktree = memberWorktree(member);
+    if (!worktree) {
+      return `${member.name} has no worktree (isolation: none); it worked in the shared tree. Use git status/diff in ${this.options.cwd}.`;
+    }
+    return reviewTeamWorktree(worktree, options);
+  }
+
+  async merge(
+    caller: string,
+    name: string,
+    options: {
+      testCommand?: string;
+      skipTests?: boolean;
+      cleanup?: boolean;
+      timeoutMs?: number;
+    } = {},
+  ): Promise<string> {
+    if (caller !== "lead") throw new Error("Only the lead can merge worktrees.");
+    const state = await this.ensureState();
+    const member = this.findMember(sanitizeName(name));
+    if (!member) throw new Error(`Unknown teammate "${name}".`);
+    if (member.status === "running") {
+      throw new Error(
+        `Teammate "${member.name}" is still running. Await or stop it before merging.`,
+      );
+    }
+    const worktree = memberWorktree(member);
+    if (!worktree) {
+      return `Merge blocked: ${member.name} has no worktree. Its changes (if any) are already in the shared tree.`;
+    }
+
+    const result = await this.withLock(() =>
+      mergeTeamWorktree({
+        record: worktree,
+        leadCwd: this.options.cwd,
+        teamDir: this.teamDir,
+        name: member.name,
+        testCommand: options.testCommand ?? state.settings.testCommand,
+        testTimeoutMs: options.timeoutMs ?? state.settings.testTimeoutMs,
+        skipTests: options.skipTests,
+        cleanup: options.cleanup,
+      }),
+    );
+
+    if (result.status === "merged") {
+      member.mergedAt = now();
+      member.mergeCommit = result.mergeCommit;
+      if (result.cleaned) {
+        member.worktreePath = undefined;
+        member.worktreeCwd = undefined;
+      }
+      await this.save();
+      this.emitState();
+    }
+    if (result.status === "merged") return result.message;
+    return `Merge blocked (${result.status}):\n\n${result.message}`;
   }
 
   async sendMessage(from: string, to: string, text: string): Promise<string> {
@@ -936,13 +1119,24 @@ export class TeamManager implements TeamController {
       .join("\n");
   }
 
-  async shutdown(caller: string, name: string): Promise<string> {
+  async shutdown(
+    caller: string,
+    name: string,
+    options: { removeWorktree?: boolean } = {},
+  ): Promise<string> {
     if (caller !== "lead") throw new Error("Only the lead can shut down teammates.");
     await this.ensureState();
     const member = this.findMember(sanitizeName(name));
     if (!member) throw new Error(`Unknown teammate "${name}".`);
     const runtime = this.runtimes.get(member.name);
+    const worktree = memberWorktree(member);
     if (runtime?.controller) runtime.controller.abort();
+    if (runtime?.runPromise) {
+      await Promise.race([
+        runtime.runPromise.catch(() => {}),
+        new Promise<void>((resolve) => setTimeout(resolve, 5000)),
+      ]);
+    }
     if (runtime) {
       runtime.queued = [];
       runtime.agent = undefined;
@@ -952,9 +1146,25 @@ export class TeamManager implements TeamController {
     member.currentRunId = undefined;
     member.currentTaskId = undefined;
     this.runtimes.delete(member.name);
+
+    let cleanup = "";
+    if (options.removeWorktree) {
+      if (!worktree) {
+        cleanup = " It had no worktree to remove.";
+      } else {
+        const problem = await removeTeamWorktree(worktree);
+        if (problem) {
+          cleanup = ` Worktree cleanup failed: ${problem}`;
+        } else {
+          member.worktreePath = undefined;
+          member.worktreeCwd = undefined;
+          cleanup = ` Removed worktree ${worktree.path} and branch ${worktree.branch}.`;
+        }
+      }
+    }
     await this.save();
     this.emitState();
-    return `Shut down ${member.name}.`;
+    return `Shut down ${member.name}.${cleanup}`;
   }
 
   async transcript(name: string): Promise<Message[]> {

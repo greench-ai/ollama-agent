@@ -48,6 +48,9 @@ const bridge = {
   teamTranscript: (name: string) =>
     ipcRenderer.invoke("team:transcript", { name }),
 
+  teamReview: (name: string, diff = false) =>
+    ipcRenderer.invoke("team:review", { name, diff }),
+
   updateSettings: (patch: {
     theme?: string;
     model?: string;

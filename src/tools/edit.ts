@@ -1,6 +1,6 @@
 import { readFile, writeFile } from "node:fs/promises";
 import type { Tool, ToolResult } from "../core/types.ts";
-import { requireAbsolutePath, requireString } from "./shared.ts";
+import { assertWithinRoot, requireAbsolutePath, requireString } from "./shared.ts";
 
 function diffSummary(before: string, after: string): string {
   const beforeLines = before.split("\n");
@@ -55,8 +55,9 @@ export const editTool: Tool = {
     required: ["file_path", "old_string", "new_string"],
   },
 
-  async run(input): Promise<ToolResult> {
+  async run(input, ctx): Promise<ToolResult> {
     const filePath = requireAbsolutePath(input);
+    await assertWithinRoot(filePath, ctx.allowedRoot);
     const oldString = requireString(input, "old_string");
     const newString = requireString(input, "new_string");
     const replaceAll = input.replace_all === true;

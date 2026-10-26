@@ -148,7 +148,7 @@ Options
 Slash commands
   /help  /models  /model <name>  /mode <mode>  /think [on|off]
   /agents                  list subagent definitions
-  /team [status|tasks|stop <name>|message <name> <text>|transcript <name>]
+  /team [status|tasks|review <name> [--diff]|merge <name> [--skip-tests] [--cleanup] [--test <cmd>]|stop <name> [--remove-worktree]|message <name> <text>|transcript <name>]
   /image <path>  /images   (attach images to the next message)
   /file <path>   /files    (attach text/code/PDF files to the next message)
   /mcp [reconnect <server>]  /mcp logout <server>
@@ -478,13 +478,53 @@ async function main(): Promise<void> {
                 break;
               }
               console.log(await agent.team.sendMessage("user", target, text));
+            } else if (subcommand === "review") {
+              const target = rest[1];
+              if (!target) {
+                console.log(style.dim("usage: /team review <name> [--diff]"));
+                break;
+              }
+              console.log(
+                await agent.team.review("lead", target, {
+                  diff: rest.includes("--diff"),
+                }),
+              );
+            } else if (subcommand === "merge") {
+              const target = rest[1];
+              if (!target) {
+                console.log(
+                  style.dim(
+                    "usage: /team merge <name> [--skip-tests] [--cleanup] [--test <cmd>]",
+                  ),
+                );
+                break;
+              }
+              const flags = rest.slice(2);
+              const testAt = flags.indexOf("--test");
+              const options = testAt >= 0 ? flags.slice(0, testAt) : flags;
+              const testCommand =
+                testAt >= 0 ? flags.slice(testAt + 1).join(" ").trim() : undefined;
+              console.log(style.dim(`merging ${target} through the trial-merge gate…`));
+              console.log(
+                await agent.team.merge("lead", target, {
+                  testCommand: testCommand || undefined,
+                  skipTests: options.includes("--skip-tests"),
+                  cleanup: options.includes("--cleanup"),
+                }),
+              );
             } else if (subcommand === "stop") {
               const target = rest[1];
               if (!target) {
-                console.log(style.dim("usage: /team stop <name>"));
+                console.log(
+                  style.dim("usage: /team stop <name> [--remove-worktree]"),
+                );
                 break;
               }
-              console.log(await agent.team.shutdown("lead", target));
+              console.log(
+                await agent.team.shutdown("lead", target, {
+                  removeWorktree: rest.includes("--remove-worktree"),
+                }),
+              );
             } else if (subcommand === "transcript") {
               const target = rest[1];
               if (!target) {
@@ -513,7 +553,7 @@ async function main(): Promise<void> {
             } else {
               console.log(
                 style.dim(
-                  "usage: /team [status|tasks|stop <name>|message <name> <text>|transcript <name>]",
+                  "usage: /team [status|tasks|review <name> [--diff]|merge <name> [--skip-tests] [--cleanup] [--test <cmd>]|stop <name> [--remove-worktree]|message <name> <text>|transcript <name>]",
                 ),
               );
             }

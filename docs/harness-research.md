@@ -4,10 +4,10 @@ Date: 2026-10-26
 Scope: multi-agent orchestration and adjacent features worth adding to a local
 Ollama coding client.
 
-> Implementation status (2026-10-26): Phase 1 (agent definitions) and Phase 2
+> Implementation status (2026-10-26): Phase 1 (agent definitions), Phase 2
 > (team core with task board, mailboxes, background runs, transcripts, and
-> persistence) are implemented. Worktree isolation, diff review, and the
-> trial-merge/test gate remain (Phase 3).
+> persistence), and Phase 3 (git worktree isolation, diff review, serialized
+> trial merge + test gate, worktree cleanup) are implemented. Phase 4 remains.
 
 ## 1. Executive summary
 

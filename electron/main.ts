@@ -423,6 +423,16 @@ function registerIpc(): void {
     return { messages: await agent.team.transcript(typeof name === "string" ? name : "") };
   });
 
+  ipcMain.handle("team:review", async (_event, payload: unknown) => {
+    if (!agent.team) throw new Error("Team mode is not enabled.");
+    const record = asRecord(payload);
+    const name = typeof record.name === "string" ? record.name : "";
+    if (!name) throw new Error("Missing teammate name.");
+    return {
+      report: await agent.team.review("lead", name, { diff: record.diff === true }),
+    };
+  });
+
   ipcMain.handle(
     "agent:set-state",
     (_event, payload: unknown) => {
@@ -1050,6 +1060,10 @@ async function createWindow(): Promise<void> {
         }
         if (process.env.AGENT_SMOKE_SCREENSHOT) {
           await new Promise((resolve) => setTimeout(resolve, 1200));
+          mainWindow?.show();
+          mainWindow?.focus();
+          mainWindow?.webContents.invalidate();
+          await new Promise((resolve) => setTimeout(resolve, 800));
           const image = await mainWindow?.webContents.capturePage();
           if (image) {
             await writeFile(process.env.AGENT_SMOKE_SCREENSHOT, image.toPNG());
