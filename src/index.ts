@@ -6,6 +6,8 @@ import {
   agentCatalogPrompt,
   loadAgentDefinitions,
 } from "./core/agent-definitions.ts";
+import { loadSkills, withSkillCatalog } from "./core/skills.ts";
+import { HooksEngine, describeHooks } from "./core/hooks.ts";
 import { MAX_IMAGE_BYTES, loadImageAttachment } from "./core/images.ts";
 import { MAX_ATTACHMENTS, readFileAttachment } from "./core/files.ts";
 import type { FileAttachment, ImageAttachment } from "./core/types.ts";
@@ -148,6 +150,10 @@ Options
 Slash commands
   /help  /models  /model <name>  /mode <mode>  /think [on|off]
   /agents                  list subagent definitions
+  /skills                  reload and list skills
+  /skill <name>            print a loaded skill
+  /rewind [list|<id|n>]    list or restore a file checkpoint
+  /hooks                   reload and list lifecycle hooks
   /team [status|tasks|review <name> [--diff]|merge <name> [--skip-tests] [--cleanup] [--test <cmd>]|stop <name> [--remove-worktree]|message <name> <text>|transcript <name>]
   /image <path>  /images   (attach images to the next message)
   /file <path>   /files    (attach text/code/PDF files to the next message)
@@ -343,6 +349,8 @@ async function main(): Promise<void> {
 
   const permissions = new PermissionEngine(options.mode, ask);
   let agentDefinitions = await loadAgentDefinitions(cwd);
+  let skills = await loadSkills(cwd);
+  let hooks = await HooksEngine.load(cwd);
 
   const agent = new Agent({
     provider,
@@ -357,6 +365,8 @@ async function main(): Promise<void> {
     messages: prior,
     planApprover,
     agentDefinitions,
+    skills,
+    hooks,
     onEvent: (event) => renderer.handle(event),
   });
 
@@ -443,9 +453,122 @@ async function main(): Promise<void> {
             console.log(style.red(error instanceof Error ? error.message : String(error)));
           }
           break;
+        case "rewind": {
+          if (!agent.checkpoints) {
+            console.log(style.dim("checkpoints are disabled"));
+            break;
+          }
+          const checkpoints = await agent.checkpoints.list(50);
+          const target = rest[0];
+          if (!target || target === "list") {
+            if (checkpoints.length === 0) {
+              console.log(style.dim("no checkpoints in this session"));
+              break;
+            }
+            console.log(style.dim("Most recent first; /rewind <n|id> restores files only."));
+            checkpoints.forEach((checkpoint, index) => {
+              console.log(
+                `${index + 1}. ${style.bold(checkpoint.id)} ${style.dim(`· ${checkpoint.at} · ${checkpoint.tool}`)}`,
+              );
+              for (const file of checkpoint.files) console.log(`   ${file}`);
+            });
+            break;
+          }
+          let id = target;
+          if (/^\d+$/.test(target)) {
+            id = checkpoints[Number(target) - 1]?.id ?? "";
+            if (!id) {
+              console.log(style.dim(`no checkpoint ${target}`));
+              break;
+            }
+          } else {
+            const match = checkpoints.find(
+              (checkpoint) =>
+                checkpoint.id === target || checkpoint.id.startsWith(target),
+            );
+            if (!match) {
+              console.log(style.dim(`unknown checkpoint "${target}"`));
+              break;
+            }
+            id = match.id;
+          }
+          try {
+            console.log(await agent.checkpoints.restore(id));
+          } catch (error) {
+            console.log(
+              style.red(error instanceof Error ? error.message : String(error)),
+            );
+          }
+          break;
+        }
+        case "hooks": {
+          hooks = await HooksEngine.load(cwd);
+          agent.hooks = hooks;
+          const entries = describeHooks(hooks);
+          if (entries.length === 0) {
+            console.log(
+              style.dim(
+                "no hooks; add ~/.config/ollama-agent/hooks.json or .ollama-agent/hooks.json",
+              ),
+            );
+            break;
+          }
+          for (const entry of entries) console.log(entry);
+          break;
+        }
+        case "skills": {
+          skills = await loadSkills(cwd);
+          agent.skills = skills;
+          agent.system = withSkillCatalog(
+            `${systemPrompt(cwd)}\n\n${agentCatalogPrompt(agentDefinitions)}`,
+            skills,
+          );
+          if (skills.size === 0) {
+            console.log(
+              style.dim(
+                "no skills found; add SKILL.md under ~/.config/ollama-agent/skills or .ollama-agent/skills",
+              ),
+            );
+            break;
+          }
+          for (const skill of [...skills.values()].sort((a, b) =>
+            a.name.localeCompare(b.name),
+          )) {
+            console.log(`${style.bold(skill.name)} ${style.dim(`(${skill.source})`)}`);
+            console.log(`  ${style.dim(skill.description)}`);
+          }
+          break;
+        }
+        case "skill": {
+          const name = rest[0];
+          if (!name) {
+            console.log(style.dim("usage: /skill <name>"));
+            break;
+          }
+          const skill = agent.skills.get(name);
+          if (!skill) {
+            console.log(
+              style.dim(
+                `unknown skill "${name}"; available: ${[...agent.skills.keys()].sort().join(", ") || "(none)"}`,
+              ),
+            );
+            break;
+          }
+          console.log(style.bold(skill.name));
+          console.log(skill.body);
+          console.log(style.dim(`root: ${skill.root}`));
+          if (skill.files.length > 0) {
+            console.log(style.dim(skill.files.join("\n")));
+          }
+          break;
+        }
         case "agents": {
           agentDefinitions = await loadAgentDefinitions(cwd);
           agent.agentDefinitions = agentDefinitions;
+          agent.system = withSkillCatalog(
+            `${systemPrompt(cwd)}\n\n${agentCatalogPrompt(agentDefinitions)}`,
+            agent.skills,
+          );
           for (const definition of [...agentDefinitions.values()].sort((a, b) =>
             a.name.localeCompare(b.name),
           )) {

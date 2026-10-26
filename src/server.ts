@@ -39,6 +39,12 @@ import {
   loadAgentDefinitions,
   summarizeAgentDefinitions,
 } from "./core/agent-definitions.ts";
+import {
+  loadSkills,
+  summarizeSkills,
+  withSkillCatalog,
+} from "./core/skills.ts";
+import { HooksEngine, describeHooks } from "./core/hooks.ts";
 import { loadMcpConfig, type McpServerConfig } from "./mcp/config.ts";
 import {
   defaultMcpConfigPath,
@@ -266,6 +272,8 @@ async function main(): Promise<void> {
     ask,
   );
   let agentDefinitions = await loadAgentDefinitions(options.cwd);
+  let skills = await loadSkills(options.cwd);
+  let hooks = await HooksEngine.load(options.cwd);
 
   const agent = new Agent({
     provider,
@@ -277,6 +285,8 @@ async function main(): Promise<void> {
     system: `${buildSystemPrompt(options.cwd, projectInstructions)}\n\n${agentCatalogPrompt(agentDefinitions)}`,
     planApprover,
     agentDefinitions,
+    skills,
+    hooks,
     onEvent: (event: AgentEvent) => {
       if (!stream) return;
       switch (event.type) {
@@ -490,7 +500,50 @@ async function main(): Promise<void> {
       if (request.method === "GET" && url.pathname === "/api/agents") {
         json(response, 200, {
           agents: summarizeAgentDefinitions(agentDefinitions),
+          skills: summarizeSkills(skills),
         });
+        return;
+      }
+
+      if (request.method === "GET" && url.pathname === "/api/skills") {
+        json(response, 200, { skills: summarizeSkills(skills) });
+        return;
+      }
+
+      if (request.method === "GET" && url.pathname === "/api/hooks") {
+        json(response, 200, { hooks: describeHooks(hooks) });
+        return;
+      }
+
+      if (request.method === "GET" && url.pathname === "/api/checkpoints") {
+        json(response, 200, {
+          checkpoints: agent.checkpoints ? await agent.checkpoints.list(50) : [],
+        });
+        return;
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/checkpoints/restore") {
+        if (!agent.checkpoints) {
+          json(response, 400, { error: "Checkpoints are disabled." });
+          return;
+        }
+        const body = await readJson(request);
+        const id = typeof body.id === "string" ? body.id : "";
+        if (!id) {
+          json(response, 400, { error: "Missing checkpoint id." });
+          return;
+        }
+        try {
+          const report = await agent.checkpoints.restore(id);
+          json(response, 200, {
+            report,
+            checkpoints: await agent.checkpoints.list(50),
+          });
+        } catch (error) {
+          json(response, 400, {
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
         return;
       }
 
@@ -622,8 +675,15 @@ async function main(): Promise<void> {
         agent.cwd = directory;
         projectInstructions = await loadProjectInstructions(directory);
         agentDefinitions = await loadAgentDefinitions(directory);
+        skills = await loadSkills(directory);
+        hooks = await HooksEngine.load(directory);
         agent.agentDefinitions = agentDefinitions;
-        agent.system = `${buildSystemPrompt(directory, projectInstructions)}\n\n${agentCatalogPrompt(agentDefinitions)}`;
+        agent.skills = skills;
+        agent.hooks = hooks;
+        agent.system = withSkillCatalog(
+          `${buildSystemPrompt(directory, projectInstructions)}\n\n${agentCatalogPrompt(agentDefinitions)}`,
+          skills,
+        );
 
         const next = await Session.create({ cwd: directory, model: agent.model });
         agent.restore(next, []);

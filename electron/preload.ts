@@ -38,6 +38,11 @@ const bridge = {
 
   listAgents: () => ipcRenderer.invoke("agents:list"),
 
+  listCheckpoints: () => ipcRenderer.invoke("checkpoints:list"),
+
+  restoreCheckpoint: (id: string) =>
+    ipcRenderer.invoke("checkpoints:restore", { id }),
+
   teamStatus: () => ipcRenderer.invoke("team:status"),
 
   teamMessage: (to: string, text: string) =>

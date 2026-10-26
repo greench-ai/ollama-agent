@@ -1154,6 +1154,7 @@
           <button class="tab active" data-tab="general" type="button">General</button>
           <button class="tab" data-tab="connectors" type="button">Connectors</button>
           <button class="tab" data-tab="agents" type="button">Agents</button>
+          <button class="tab" data-tab="rewind" type="button">Rewind</button>
           <button class="tab" data-tab="about" type="button">About</button>
         </div>
 
@@ -1290,6 +1291,20 @@
             .ollama-agent/agents/ (Markdown with YAML frontmatter).
           </div>
           <div class="mcp-list" id="agents-list"></div>
+          <div class="hint" style="margin-top: 14px">
+            Skills load from ~/.config/ollama-agent/skills/, ~/.claude/skills/,
+            .ollama-agent/skills/, .agents/skills/, and .claude/skills/.
+          </div>
+          <div class="mcp-list" id="skills-list"></div>
+        </div>
+
+        <div class="tab-panels" data-panel="rewind" hidden>
+          <div class="hint">
+            File checkpoints from Write, Edit, and MultiEdit in this session.
+            Restore rewinds files only; the conversation stays as it is.
+          </div>
+          <pre class="team-transcript" id="checkpoint-report" hidden></pre>
+          <div class="mcp-list" id="checkpoints-list"></div>
         </div>
 
         <div class="tab-panels" data-panel="about" hidden>

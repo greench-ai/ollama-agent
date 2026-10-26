@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -151,4 +151,55 @@ test("allowedRoot confines file tools to a worktree", async () => {
   const inside = path.join(root, "ok.txt");
   await writeTool.run({ file_path: inside, content: "ok" }, ctx);
   assert.match((await readTool.run({ file_path: inside }, ctx)).content, /ok/);
+});
+
+test("Edit falls back to whole-line whitespace matching", async () => {
+  const cwd = await mkdtemp(path.join(tmpdir(), "agent-test-"));
+  const ctx = context(cwd);
+  const file = path.join(cwd, "code.ts");
+  await writeFile(file, "function x() {\n    return 1;\n}\n", "utf8");
+
+  const result = await editTool.run(
+    {
+      file_path: file,
+      old_string: "function x() {\n  return 1;\n}",
+      new_string: "function x() {\n  return 2;\n}",
+    },
+    ctx,
+  );
+  assert.match(result.content, /whitespace-tolerant/);
+  assert.equal(
+    await readFile(file, "utf8"),
+    "function x() {\n  return 2;\n}\n",
+  );
+});
+
+test("fuzzy Edit still rejects ambiguous matches unless replace_all is set", async () => {
+  const cwd = await mkdtemp(path.join(tmpdir(), "agent-test-"));
+  const ctx = context(cwd);
+  const file = path.join(cwd, "code.txt");
+  await writeFile(file, "  alpha\n  beta\n    alpha\n    beta\n", "utf8");
+
+  await assert.rejects(
+    () =>
+      editTool.run(
+        { file_path: file, old_string: "alpha\nbeta", new_string: "gamma\ndelta" },
+        ctx,
+      ),
+    /whitespace normalization/,
+  );
+  const all = await editTool.run(
+    {
+      file_path: file,
+      old_string: "alpha\nbeta",
+      new_string: "  gamma\n  delta",
+      replace_all: true,
+    },
+    ctx,
+  );
+  assert.match(all.content, /2 replacement/);
+  assert.equal(
+    await readFile(file, "utf8"),
+    "  gamma\n  delta\n  gamma\n  delta\n",
+  );
 });

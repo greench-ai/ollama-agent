@@ -2,6 +2,7 @@
 // Kept UI-agnostic so the same core can back a CLI and a desktop shell.
 
 import type { TeamController } from "./team.ts";
+import type { SkillDefinition } from "./skills.ts";
 
 export type JsonSchema = {
   type?: string;
@@ -105,6 +106,8 @@ export interface ToolContext {
   agentName?: string;
   /** Confine file tools to this root (set for worktree teammates). */
   allowedRoot?: string;
+  /** Skills available to the Skill tool. */
+  skills?: Map<string, SkillDefinition>;
 }
 
 export type SubagentType = string;

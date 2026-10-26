@@ -28,7 +28,9 @@ import { compactMessages, estimateMessages } from "./tokens.ts";
 import { Session } from "./session.ts";
 import { TeamManager, type TeamAgentEvent, type TeamEvent } from "./team.ts";
 import { memberTeamTools, TEAM_TOOL_NAMES } from "../tools/team.ts";
-
+import { skillCatalogPrompt, type SkillDefinition } from "./skills.ts";
+import { CheckpointStore } from "./checkpoints.ts";
+import { HooksEngine } from "./hooks.ts";
 export type AgentEvent =
   | { type: "text"; text: string }
   | { type: "thinking"; text: string }
@@ -86,6 +88,12 @@ export interface AgentOptions {
   agentName?: string;
   /** Confine file tools to this root (worktree teammates). */
   workspaceRoot?: string;
+  /** Skills available to the Skill tool and advertised in the system prompt. */
+  skills?: Map<string, SkillDefinition>;
+  /** Checkpoint store; true by default, false disables file snapshots. */
+  checkpoints?: CheckpointStore | false;
+  /** Lifecycle hooks loaded from user/project config. */
+  hooks?: HooksEngine;
   /** Lead agents create a team manager unless disabled. */
   teamsEnabled?: boolean;
   onEvent?: (event: AgentEvent) => void;
@@ -118,6 +126,10 @@ export class Agent {
   teamRole: "lead" | "member";
   agentName: string;
   workspaceRoot?: string;
+  skills: Map<string, SkillDefinition>;
+  checkpoints?: CheckpointStore;
+  hooks?: HooksEngine;
+  private checkpointsDisabled: boolean;
   private teamsEnabled: boolean;
   private subagentCounter = 0;
   private onEvent: (event: AgentEvent) => void;
@@ -130,7 +142,17 @@ export class Agent {
     this.session = options.session;
     this.cwd = options.cwd;
     this.system = options.system;
-    this.think = options.think ?? false;
+    this.skills = options.skills ?? new Map();
+    if (this.skills.size > 0) {
+      this.system = `${this.system}\n\n${skillCatalogPrompt(this.skills)}`;
+    }
+    this.checkpointsDisabled = options.checkpoints === false;
+    this.checkpoints = this.checkpointsDisabled
+      ? undefined
+      : options.checkpoints instanceof CheckpointStore
+        ? options.checkpoints
+        : new CheckpointStore(this.session.id);
+    this.hooks = options.hooks;    this.think = options.think ?? false;
     this.numCtx = options.numCtx;
     this.temperature = options.temperature;
     this.maxTurns = options.maxTurns ?? 40;
@@ -176,6 +198,8 @@ export class Agent {
       cwd: this.cwd,
       parentSessionId,
       agentDefinitions: this.agentDefinitions,
+      skills: this.skills,
+      hooks: this.hooks,
       onEvent: (event) => this.onEvent({ type: "team_event", event }),
       createAgent: (config) =>
         new Agent({
@@ -196,6 +220,8 @@ export class Agent {
           depth: this.depth + 1,
           maxDepth: this.maxDepth,
           agentDefinitions: this.agentDefinitions,
+          skills: config.skills,
+          hooks: config.hooks,
           team: manager,
           teamRole: "member",
           agentName: config.name,
@@ -242,6 +268,35 @@ export class Agent {
     images?: ImageAttachment[],
     files?: FileAttachment[],
   ): Promise<void> {
+    if (this.hooks?.has("SessionStart") && this.messages.length === 0) {
+      const started = await this.hooks.run("SessionStart", {
+        cwd: this.cwd,
+        sessionId: this.session.id,
+        agentName: this.agentName,
+      });
+      if (started.output) {
+        this.onEvent({ type: "notice", text: started.output });
+      }
+    }
+    if (this.hooks?.has("UserPromptSubmit")) {
+      const submitted = await this.hooks.run("UserPromptSubmit", {
+        cwd: this.cwd,
+        sessionId: this.session.id,
+        agentName: this.agentName,
+        prompt: userText,
+      });
+      if (submitted.blocked) {
+        this.onEvent({
+          type: "notice",
+          text: `Prompt blocked by hook: ${submitted.reason ?? "exit 2"}`,
+        });
+        return;
+      }
+      if (submitted.output) {
+        this.onEvent({ type: "notice", text: submitted.output });
+      }
+    }
+
     const content: ContentBlock[] = [{ type: "text", text: userText }];
     for (const image of images ?? []) {
       content.push({ type: "image", ...image });
@@ -341,6 +396,20 @@ export class Agent {
       }
 
       if (toolCalls.length === 0) {
+        if (this.hooks?.has("Stop")) {
+          const stopped = await this.hooks.run("Stop", {
+            cwd: this.cwd,
+            sessionId: this.session.id,
+            agentName: this.agentName,
+            text,
+          });
+          if (stopped.output || stopped.reason) {
+            this.onEvent({
+              type: "notice",
+              text: stopped.reason ?? stopped.output ?? "",
+            });
+          }
+        }
         this.onEvent({ type: "turn_end" });
         return;
       }
@@ -377,6 +446,30 @@ export class Agent {
       };
     }
 
+    if (this.hooks?.has("PreToolUse")) {
+      const hooked = await this.hooks.run("PreToolUse", {
+        tool: tool.name,
+        input: call.input,
+        cwd: this.cwd,
+        sessionId: this.session.id,
+        agentName: this.agentName,
+      });
+      if (hooked.output) {
+        this.onEvent({ type: "notice", text: hooked.output });
+      }
+      if (hooked.blocked) {
+        const content = `Blocked by PreToolUse hook: ${hooked.reason ?? "exit 2"}`;
+        this.onEvent({ type: "tool_end", name: tool.name, content, isError: true });
+        return {
+          type: "tool_result",
+          tool_use_id: call.id,
+          name: tool.name,
+          content,
+          is_error: true,
+        };
+      }
+    }
+
     const permission = await this.permissions.check({
       tool: tool.name,
       input: call.input,
@@ -392,6 +485,23 @@ export class Agent {
         content,
         is_error: true,
       };
+    }
+
+    if (this.checkpoints && tool.mutating) {
+      try {
+        await this.checkpoints.capture(
+          tool.name,
+          call.input,
+          this.cwd,
+          this.messages.length,
+          this.workspaceRoot,
+        );
+      } catch (error) {
+        this.onEvent({
+          type: "notice",
+          text: `checkpoint failed: ${error instanceof Error ? error.message : String(error)}`,
+        });
+      }
     }
 
     const summary = summarizeToolInput(tool.name, call.input);
@@ -410,6 +520,7 @@ export class Agent {
       teamRole: this.teamRole,
       agentName: this.agentName,
       allowedRoot: this.workspaceRoot,
+      skills: this.skills,
     };
 
     let content: string;
@@ -423,6 +534,22 @@ export class Agent {
     } catch (error) {
       content = error instanceof Error ? error.message : String(error);
       isError = true;
+    }
+
+    const postEvent = isError ? "PostToolUseFailure" : "PostToolUse";
+    if (this.hooks?.has(postEvent)) {
+      const hooked = await this.hooks.run(postEvent, {
+        tool: tool.name,
+        input: call.input,
+        output: content.slice(0, 20_000),
+        isError,
+        cwd: this.cwd,
+        sessionId: this.session.id,
+        agentName: this.agentName,
+      });
+      if (hooked.output) {
+        this.onEvent({ type: "notice", text: hooked.output });
+      }
     }
 
     if (content.length > this.maxToolResultChars) {
@@ -512,6 +639,13 @@ export class Agent {
       const allowed = new Set(definition.tools.map(toolBaseName));
       childTools = childTools.filter((tool) => allowed.has(tool.name));
     }
+    const skillDenied = definition.disallowedTools?.some(
+      (tool) => toolBaseName(tool) === "Skill",
+    );
+    if (!skillDenied && !childTools.some((tool) => tool.name === "Skill")) {
+      const skill = this.tools.find((tool) => tool.name === "Skill");
+      if (skill) childTools.push(skill);
+    }
 
     const childPermissions = this.permissions.fork(
       definition.permissionMode ?? this.permissions.mode,
@@ -558,6 +692,9 @@ export class Agent {
       maxDepth: this.maxDepth,
       teamsEnabled: false,
       agentName: name,
+      agentDefinitions: this.agentDefinitions,
+      skills: this.skills,
+      hooks: this.hooks,
       onEvent: (event) => {
         if (event.type === "tool_start") {
           this.onEvent({
@@ -573,6 +710,17 @@ export class Agent {
     try {
       await child.run(request.prompt);
       const report = lastAssistantText(child.messages);
+      if (this.hooks?.has("SubagentStop")) {
+        const stopped = await this.hooks.run("SubagentStop", {
+          cwd: this.cwd,
+          sessionId: this.session.id,
+          agentName: name,
+          report,
+        });
+        if (stopped.output) {
+          this.onEvent({ type: "notice", text: stopped.output });
+        }
+      }
       this.onEvent({
         type: "subagent_end",
         name,
@@ -617,10 +765,21 @@ export class Agent {
     this.session = session;
     this.messages = [...messages];
     this.todos = [];
+    if (!this.checkpointsDisabled) {
+      this.checkpoints = new CheckpointStore(session.id);
+    }
   }
 
   /** Stop background teammates owned by this lead. */
   async close(): Promise<void> {
+    if (this.hooks?.has("SessionEnd")) {
+      const ended = await this.hooks.run("SessionEnd", {
+        cwd: this.cwd,
+        sessionId: this.session.id,
+        agentName: this.agentName,
+      });
+      if (ended.output) this.onEvent({ type: "notice", text: ended.output });
+    }
     await this.team?.close();
   }
 }

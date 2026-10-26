@@ -42,6 +42,13 @@ import {
   summarizeAgentDefinitions,
   type AgentDefinition,
 } from "../src/core/agent-definitions.ts";
+import {
+  loadSkills,
+  summarizeSkills,
+  withSkillCatalog,
+  type SkillDefinition,
+} from "../src/core/skills.ts";
+import { HooksEngine } from "../src/core/hooks.ts";
 import { loadMcpConfig, type McpServerConfig } from "../src/mcp/config.ts";
 import {
   defaultMcpConfigPath,
@@ -128,6 +135,8 @@ let settings: AppSettings;
 let mcpConfigPath: string;
 let projectInstructions: ProjectInstructions | undefined;
 let agentDefinitions: Map<string, AgentDefinition> = new Map();
+let skills: Map<string, SkillDefinition> = new Map();
+let hooks = new HooksEngine();
 let mcp: McpManager | undefined;
 
 type UpdaterStateName =
@@ -369,6 +378,8 @@ async function initCore(): Promise<void> {
     ask,
   );
   agentDefinitions = await loadAgentDefinitions(options.cwd);
+  skills = await loadSkills(options.cwd);
+  hooks = await HooksEngine.load(options.cwd);
   agent = new Agent({
     provider,
     model,
@@ -379,6 +390,8 @@ async function initCore(): Promise<void> {
     system: `${buildSystemPrompt(options.cwd, projectInstructions)}\n\n${agentCatalogPrompt(agentDefinitions)}`,
     planApprover,
     agentDefinitions,
+    skills,
+    hooks,
     onEvent: forwardAgentEvent,
   });
 }
@@ -393,7 +406,20 @@ function registerIpc(): void {
 
   ipcMain.handle("agents:list", () => ({
     agents: summarizeAgentDefinitions(agentDefinitions),
+    skills: summarizeSkills(skills),
   }));
+
+  ipcMain.handle("checkpoints:list", async () => ({
+    checkpoints: agent.checkpoints ? await agent.checkpoints.list(50) : [],
+  }));
+
+  ipcMain.handle("checkpoints:restore", async (_event, payload: unknown) => {
+    if (!agent.checkpoints) throw new Error("Checkpoints are disabled.");
+    const id = asRecord(payload).id;
+    if (typeof id !== "string" || !id) throw new Error("Missing checkpoint id.");
+    const report = await agent.checkpoints.restore(id);
+    return { report, checkpoints: await agent.checkpoints.list(50) };
+  });
 
   ipcMain.handle("team:status", async () => ({
     team: (await agent.team?.snapshot()) ?? null,
@@ -701,8 +727,15 @@ function registerIpc(): void {
     agent.cwd = directory;
     projectInstructions = await loadProjectInstructions(directory);
     agentDefinitions = await loadAgentDefinitions(directory);
+    skills = await loadSkills(directory);
+    hooks = await HooksEngine.load(directory);
     agent.agentDefinitions = agentDefinitions;
-    agent.system = `${buildSystemPrompt(directory, projectInstructions)}\n\n${agentCatalogPrompt(agentDefinitions)}`;
+    agent.skills = skills;
+    agent.hooks = hooks;
+    agent.system = withSkillCatalog(
+      `${buildSystemPrompt(directory, projectInstructions)}\n\n${agentCatalogPrompt(agentDefinitions)}`,
+      skills,
+    );
 
     const next = await Session.create({ cwd: directory, model: agent.model });
     agent.restore(next, []);
@@ -1004,12 +1037,21 @@ async function createWindow(): Promise<void> {
           }
         }
         if (process.env.AGENT_SMOKE_MODAL) {
-          await mainWindow?.webContents.executeJavaScript(`
-            document.getElementById("settings-btn").click();
-            const tab = document.querySelector('.tab[data-tab="${process.env.AGENT_SMOKE_MODAL}"]');
-            if (tab) tab.click();
+          const modalState = await mainWindow?.webContents.executeJavaScript(`
+            (() => {
+              document.getElementById("settings-btn").click();
+              const tab = document.querySelector('.tab[data-tab="${process.env.AGENT_SMOKE_MODAL}"]');
+              if (tab) tab.click();
+              return JSON.stringify({
+                hidden: document.getElementById("modal").hidden,
+                tab: Boolean(tab),
+                body: document.body.className,
+                checkpoints: (document.getElementById("checkpoints-list")?.innerText || "").slice(0, 200),
+              });
+            })()
           `);
-          await new Promise((resolve) => setTimeout(resolve, 900));
+          console.log("[electron] modal smoke:", modalState);
+          await new Promise((resolve) => setTimeout(resolve, 1500));
         }
         if (process.env.AGENT_SMOKE_UPDATE) {
           await mainWindow?.webContents.executeJavaScript(`

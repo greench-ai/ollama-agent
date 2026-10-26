@@ -48,6 +48,11 @@
 
     listAgents: () => fetch("/api/agents").then((response) => response.json()),
 
+    listCheckpoints: () =>
+      fetch("/api/checkpoints").then((response) => response.json()),
+
+    restoreCheckpoint: (id) => post("/api/checkpoints/restore", { id }),
+
     teamStatus: () => fetch("/api/team").then((response) => response.json()),
 
     teamMessage: (to, text) => post("/api/team/message", { to, text }),

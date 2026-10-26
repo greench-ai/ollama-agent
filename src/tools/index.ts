@@ -9,6 +9,7 @@ import { todoTool } from "./todo.ts";
 import { taskTool } from "./task.ts";
 import { exitPlanModeTool } from "./exit-plan.ts";
 import { teamTools } from "./team.ts";
+import { skillTool } from "./skill.ts";
 
 export const allTools: Tool[] = [
   readTool,
@@ -21,6 +22,7 @@ export const allTools: Tool[] = [
   todoTool,
   taskTool,
   exitPlanModeTool,
+  skillTool,
   ...teamTools,
 ];
 
@@ -40,4 +42,5 @@ export {
   taskTool,
   exitPlanModeTool,
   teamTools,
+  skillTool,
 };

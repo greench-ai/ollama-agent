@@ -6,8 +6,11 @@ Ollama coding client.
 
 > Implementation status (2026-10-26): Phase 1 (agent definitions), Phase 2
 > (team core with task board, mailboxes, background runs, transcripts, and
-> persistence), and Phase 3 (git worktree isolation, diff review, serialized
-> trial merge + test gate, worktree cleanup) are implemented. Phase 4 remains.
+> persistence), Phase 3 (git worktree isolation, diff review, serialized trial
+> merge + test gate, worktree cleanup), and Phase 4a (Skills with progressive
+> disclosure, file checkpoints/rewind, lifecycle hooks, whitespace-tolerant
+> edits) are implemented. Deferred tool loading, ACP, scheduled agents,
+> telemetry, and signing remain.
 
 ## 1. Executive summary
 

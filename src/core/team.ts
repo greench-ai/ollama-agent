@@ -12,6 +12,8 @@ import {
   reviewTeamWorktree,
   type WorktreeRecord,
 } from "./worktree.ts";
+import type { SkillDefinition } from "./skills.ts";
+import type { HooksEngine } from "./hooks.ts";
 
 export type TeamMemberStatus = "idle" | "running" | "offline" | "error";
 export type TeamTaskStatus = "pending" | "in_progress" | "completed" | "blocked";
@@ -137,6 +139,8 @@ export interface TeamAgentConfig {
   maxTurns: number;
   cwd?: string;
   workspaceRoot?: string;
+  skills?: Map<string, SkillDefinition>;
+  hooks?: HooksEngine;
   messages?: Message[];
   onEvent: (event: TeamAgentEvent) => void;
 }
@@ -160,6 +164,8 @@ export interface TeamManagerOptions {
   cwd: string;
   parentSessionId: string;
   agentDefinitions: Map<string, AgentDefinition>;
+  skills?: Map<string, SkillDefinition>;
+  hooks?: HooksEngine;
   createAgent: TeamAgentFactory;
   onEvent: (event: TeamEvent) => void;
 }
@@ -488,6 +494,13 @@ export class TeamManager implements TeamController {
     }
     const byName = new Map(tools.map((tool) => [tool.name, tool]));
     for (const tool of this.options.memberTools) byName.set(tool.name, tool);
+    const skillDenied = definition.disallowedTools?.some(
+      (tool) => toolBaseName(tool) === "Skill",
+    );
+    if (!skillDenied) {
+      const skill = this.options.baseTools.find((tool) => tool.name === "Skill");
+      if (skill) byName.set("Skill", skill);
+    }
     return [...byName.values()];
   }
 
@@ -545,6 +558,8 @@ export class TeamManager implements TeamController {
       maxTurns: definition.maxTurns ?? this.state?.settings.maxTurns ?? 30,
       cwd: memberCwd,
       workspaceRoot: worktree?.path,
+      skills: this.options.skills,
+      hooks: this.options.hooks,
       messages: prior,
       onEvent: (event) => this.handleMemberEvent(member.name, event),
     });

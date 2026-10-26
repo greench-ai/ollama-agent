@@ -61,6 +61,9 @@
   const aboutSession = $("about-session");
   const aboutMcp = $("about-mcp");
   const agentsList = $("agents-list");
+  const skillsList = $("skills-list");
+  const checkpointsList = $("checkpoints-list");
+  const checkpointReport = $("checkpoint-report");
   const aboutVersion = $("about-version");
   const aboutInstructions = $("about-instructions");
   const aboutUpdateStatus = $("about-update-status");
@@ -1922,11 +1925,13 @@
     }
     if (name === "connectors") void refreshConnectors();
     if (name === "agents") void refreshAgents();
+    if (name === "rewind") void refreshCheckpoints();
     if (name === "about") fillAbout();
   }
 
   async function refreshAgents() {
     agentsList.innerHTML = "";
+    if (skillsList) skillsList.innerHTML = "";
     try {
       const data = await bridge.listAgents();
       for (const agent of data.agents || []) {
@@ -1955,8 +1960,96 @@
         row.appendChild(main);
         agentsList.appendChild(row);
       }
+
+      if (skillsList) {
+        const skills = data.skills || [];
+        if (skills.length === 0) {
+          skillsList.appendChild(el("div", "artifacts-empty", "No skills found."));
+        }
+        for (const skill of skills) {
+          const row = el("div", "connector");
+          const main = el("div", "connector-main");
+          const title = el("div", "connector-name");
+          title.appendChild(document.createTextNode(skill.name));
+          main.appendChild(title);
+          main.appendChild(el("div", "connector-sub", skill.description));
+          const meta = [];
+          if (skill.files && skill.files.length > 0) {
+            meta.push(`${skill.files.length} files`);
+          }
+          if (skill.source) meta.push(skill.source);
+          if (meta.length > 0) {
+            main.appendChild(el("div", "connector-sub", meta.join(" · ")));
+          }
+          row.appendChild(main);
+          skillsList.appendChild(row);
+        }
+      }
     } catch (error) {
       agentsList.appendChild(
+        el("div", "connector-error", error instanceof Error ? error.message : String(error)),
+      );
+    }
+  }
+
+  async function refreshCheckpoints() {
+    if (!checkpointsList) return;
+    checkpointsList.innerHTML = "";
+    try {
+      const data = await bridge.listCheckpoints();
+      const checkpoints = data.checkpoints || [];
+      if (checkpoints.length === 0) {
+        checkpointsList.appendChild(
+          el("div", "artifacts-empty", "No checkpoints in this session yet."),
+        );
+        return;
+      }
+      for (const checkpoint of checkpoints) {
+        const row = el("div", "connector");
+        const main = el("div", "connector-main");
+        const title = el("div", "connector-name");
+        title.appendChild(document.createTextNode(checkpoint.id));
+        main.appendChild(title);
+        main.appendChild(
+          el(
+            "div",
+            "connector-sub",
+            `${checkpoint.at.replace("T", " ").slice(0, 19)} · ${checkpoint.tool}`,
+          ),
+        );
+        main.appendChild(
+          el("div", "connector-sub", checkpoint.files.join(", ")),
+        );
+        const restore = el("button", "", "Restore");
+        restore.type = "button";
+        restore.addEventListener("click", async () => {
+          if (
+            !confirm(
+              `Restore ${checkpoint.id}? Files touched by ${checkpoint.tool} will revert.`,
+            )
+          ) {
+            return;
+          }
+          restore.disabled = true;
+          try {
+            const result = await bridge.restoreCheckpoint(checkpoint.id);
+            if (checkpointReport) {
+              checkpointReport.hidden = false;
+              checkpointReport.textContent = result.report || "";
+            }
+            await refreshCheckpoints();
+          } catch (error) {
+            addError(error instanceof Error ? error.message : String(error));
+          } finally {
+            restore.disabled = false;
+          }
+        });
+        row.appendChild(main);
+        row.appendChild(restore);
+        checkpointsList.appendChild(row);
+      }
+    } catch (error) {
+      checkpointsList.appendChild(
         el("div", "connector-error", error instanceof Error ? error.message : String(error)),
       );
     }

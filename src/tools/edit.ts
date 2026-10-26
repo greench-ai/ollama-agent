@@ -28,12 +28,53 @@ function diffSummary(before: string, after: string): string {
   return `line ${first + 1}: -${removed} +${added}`;
 }
 
+/**
+ * Whitespace-tolerant fallback: match a run of whole lines after trimming
+ * indentation and trailing spaces. It never guesses within a line.
+ */
+function fuzzyReplace(
+  text: string,
+  oldString: string,
+  newString: string,
+  replaceAll: boolean,
+): { after: string; count: number } {
+  const eol = text.includes("\r\n") ? "\r\n" : "\n";
+  const lines = text.split(/\r?\n/);
+  const oldLines = oldString.split(/\r?\n/);
+  if (oldLines.length === 0) return { after: text, count: 0 };
+  const matches: Array<{ start: number }> = [];
+  for (let start = 0; start + oldLines.length <= lines.length; start += 1) {
+    let match = true;
+    for (let offset = 0; offset < oldLines.length; offset += 1) {
+      if (lines[start + offset].trim() !== oldLines[offset].trim()) {
+        match = false;
+        break;
+      }
+    }
+    if (match) matches.push({ start });
+  }
+  if (matches.length === 0) return { after: text, count: 0 };
+  if (matches.length > 1 && !replaceAll) {
+    throw new Error(
+      `old_string occurs ${matches.length} times after whitespace normalization. ` +
+        "Include more surrounding context to make it unique, or set replace_all.",
+    );
+  }
+  const newLines = newString.split(/\r?\n/);
+  const selected = replaceAll ? matches : matches.slice(0, 1);
+  for (const match of [...selected].reverse()) {
+    lines.splice(match.start, oldLines.length, ...newLines);
+  }
+  return { after: lines.join(eol), count: selected.length };
+}
+
 export const editTool: Tool = {
   name: "Edit",
   description:
-    "Replace an exact string in a file. old_string must be unique unless " +
-    "replace_all is true. Read the file first so the replacement matches " +
-    "indentation exactly.",
+    "Replace a string in a file. old_string must be unique unless replace_all " +
+    "is true. An exact match is preferred; if it is not found, whole lines are " +
+    "matched after trimming indentation and trailing whitespace. Read the file " +
+    "first so the replacement is accurate.",
   mutating: true,
   inputSchema: {
     type: "object",
@@ -74,24 +115,36 @@ export const editTool: Tool = {
     }
 
     const occurrences = before.split(oldString).length - 1;
+    let after: string;
+    let count = occurrences;
+    let fuzzy = false;
     if (occurrences === 0) {
-      throw new Error(`old_string not found in ${filePath}.`);
+      const fallback = fuzzyReplace(before, oldString, newString, replaceAll);
+      if (fallback.count === 0) {
+        throw new Error(
+          `old_string not found in ${filePath}, including after whitespace normalization. ` +
+            "Read the file again and copy the text exactly.",
+        );
+      }
+      after = fallback.after;
+      count = fallback.count;
+      fuzzy = true;
+    } else {
+      if (occurrences > 1 && !replaceAll) {
+        throw new Error(
+          `old_string occurs ${occurrences} times in ${filePath}. ` +
+            "Include more surrounding context to make it unique, or set replace_all.",
+        );
+      }
+      after = replaceAll
+        ? before.split(oldString).join(newString)
+        : before.replace(oldString, newString);
     }
-    if (occurrences > 1 && !replaceAll) {
-      throw new Error(
-        `old_string occurs ${occurrences} times in ${filePath}. ` +
-          "Include more surrounding context to make it unique, or set replace_all.",
-      );
-    }
-
-    const after = replaceAll
-      ? before.split(oldString).join(newString)
-      : before.replace(oldString, newString);
     await writeFile(filePath, after, "utf8");
 
     return {
       content:
-        `Updated ${filePath} (${occurrences} replacement(s)).\n` +
+        `Updated ${filePath} (${count} replacement(s))${fuzzy ? " using a whitespace-tolerant match" : ""}.\n` +
         diffSummary(before, after),
     };
   },

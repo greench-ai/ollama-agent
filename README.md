@@ -56,6 +56,10 @@ node dist/cli.mjs --model qwen3:8b
 /prompt <server> <name>    run an MCP prompt
 /agents                    list subagent definitions
 /team status|tasks|review <name> [--diff]|merge <name> [--skip-tests] [--cleanup] [--test <cmd>]|stop <name> [--remove-worktree]|message <name> <text>|transcript <name>
+/skills                    reload and list skills
+/skill <name>              print a loaded skill
+/rewind [list|<id|n>]      list or restore a file checkpoint
+/hooks                     reload and list lifecycle hooks
 /clear                     clear the conversation and staged images
 /session                   show the session file
 /exit                      quit
@@ -213,6 +217,67 @@ notice is emitted; task file reservations still apply. File tools (`Read`,
 `Write`, `Edit`, `MultiEdit`, `Glob`, `Grep`) are confined to the worktree root
 for isolated teammates. Worktree isolation is not an OS sandbox: a teammate's
 `Bash` command can still reach paths outside its worktree.
+
+## Skills
+
+Skills are `SKILL.md` directories with YAML frontmatter (`name`,
+`description`). They load from:
+
+- `~/.config/ollama-agent/skills/` and `~/.claude/skills/`
+- project `.ollama-agent/skills/`, `.agents/skills/`, and `.claude/skills/`,
+  walking up to the git root (closest wins)
+
+Only the name and description enter the system prompt. When a task matches,
+the model calls the `Skill` tool; the full body and a list of resource files are
+returned on demand, so unused skills cost almost no context. `$ARGUMENTS` in a
+skill body is replaced with the tool's arguments. The tool is available to
+subagents and teammates as well.
+
+```
+Skill(name: "frontend-design", args: "the settings dialog")
+```
+
+`/skills` reloads and lists them; Settings → Agents shows the loaded catalog.
+
+## Checkpoints and rewind
+
+Before each `Write`, `Edit`, or `MultiEdit`, the agent snapshots the touched
+file under `~/.local/share/ollama-agent/checkpoints/<session>/` (up to 100
+entries per session, 5 MB per file). For a new file it records that the path
+did not exist.
+
+`/rewind` lists checkpoints; `/rewind <n|id>` restores the files to that point,
+including deleting files that did not exist. In the GUI, Settings → Rewind
+lists them with a Restore button. Restores rewind files only, not the chat.
+
+Checkpoints cover file tools, not arbitrary `Bash` side effects, and are
+confined to a teammate's worktree root.
+
+## Hooks
+
+Lifecycle hooks are shell commands in `~/.config/ollama-agent/hooks.json` or
+project `.ollama-agent/hooks.json`. Each command receives the event as JSON on
+stdin and runs with the project root as its working directory. Supported events
+include `SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`,
+`PostToolUseFailure`, `Stop`, `SubagentStop`, and `SessionEnd`.
+
+```json
+{
+  "hooks": {
+    "PreToolUse": [
+      { "matcher": "Write|Edit", "command": "scripts/check-paths.sh", "timeoutMs": 5000 }
+    ],
+    "PostToolUse": [
+      { "matcher": "Edit", "command": "npm run lint --silent" }
+    ]
+  }
+}
+```
+
+Exit code `2` blocks the action (for `PreToolUse` and `UserPromptSubmit`);
+other non-zero exits are advisory. Timed-out policy hooks fail closed. Hook
+stdout/stderr appears as a notice. Hooks are arbitrary local commands, so only
+install configs you trust. `/hooks` reloads and lists them.
 
 ## MCP servers
 
@@ -516,14 +581,15 @@ markdown rendering, stop button, themes), settings and connector management,
 project switching with project instructions, an artifact panel, an update
 checker, agent definitions (Markdown roles), a team core (task board, mailboxes,
 background teammate runs, transcripts, persistence), git worktree isolation with
-serialized trial-merge and test gates, 8 built-in tools
-(including `Task` subagents), image/text/PDF input, an MCP client
+serialized trial-merge and test gates, skills with progressive disclosure,
+file checkpoints with `/rewind`, lifecycle hooks, a whitespace-tolerant Edit
+fallback for local models, built-in tools (including `Task` subagents),
+image/text/PDF input, an MCP client
 (stdio + Streamable HTTP; tools, resources, prompts, pagination, annotations,
 reconnect, OAuth authorization-code + PKCE with discovery and dynamic client
 registration), a local HTTP/SSE server with the same web client, an Electron
 shell with a sandboxed renderer, IPC approvals, plan-mode
 propose/approve/apply, CSP, window-state persistence, menus, Linux packaging
 (AppImage + deb), cross-platform CI packaging (Windows NSIS/zip, macOS dmg/zip
-x64 + arm64), and electron-updater wiring. Not yet: skills,
-checkpoints/rewind, hooks, ACP, scheduled agents, and code
-signing/notarization.
+x64 + arm64), and electron-updater wiring. Not yet: deferred tool loading,
+ACP, scheduled agents, and code signing/notarization.
