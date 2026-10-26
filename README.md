@@ -426,7 +426,9 @@ HTTP API:
 | POST | `/api/sessions/new` | start a new session (reuses an empty one) |
 | POST | `/api/sessions/load` | load `{id}` and return its messages |
 | POST | `/api/sessions/rename` | rename `{id, title}` |
-| POST | `/api/sessions/delete` | delete `{id}` |
+| POST | `/api/sessions/delete` | delete a transcript `{id}` |
+| POST | `/api/sessions/purge` | purge `{id, deleteFiles}` including related data |
+| POST | `/api/sessions/purge-all` | purge all sessions `{deleteFiles}` |
 | POST | `/api/cancel` | abort the running turn |
 | GET | `/api/settings` | theme (including custom tweakcn), default model/mode, show-thinking |
 | POST | `/api/settings` | update settings; `customTheme: null` clears it |
@@ -602,6 +604,19 @@ Agents, Rewind, Background, and About tabs. The `MCP: add servers` /
 - **About** — working directory, session file, MCP config path, telemetry, and updates.
 
 MCP changes are blocked while a turn is running.
+
+### Purging sessions
+
+The × on a chat opens a purge dialog. Session transcripts, subagent and team
+transcripts, checkpoints, telemetry, team state, and background-job records are
+removed. By default project files are kept exactly as they are; enabling
+**Also delete project files** restores files that the session changed from its
+checkpoints on a best-effort basis. Settings → General has **Purge all
+sessions** with the same choice.
+
+Purge is a logical delete. It does not guarantee physical erasure on SSDs,
+copy-on-write filesystems, snapshots, or backups; use full-disk encryption for
+that guarantee.
 
 ### Tweakcn themes
 

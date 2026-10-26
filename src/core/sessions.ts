@@ -12,6 +12,10 @@ import type { Message } from "./types.ts";
 /** Main session ids only; subagent transcripts use the same directory. */
 const ID_PATTERN = /^\d{8}-\d{6}-[0-9a-f]{6}$/;
 
+export function isSessionId(id: string): boolean {
+  return ID_PATTERN.test(id);
+}
+
 export interface SessionSummary {
   id: string;
   title: string;

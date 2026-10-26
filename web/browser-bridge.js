@@ -44,6 +44,12 @@
 
     deleteSession: (id) => post("/api/sessions/delete", { id }),
 
+    purgeSession: (id, deleteFiles = false) =>
+      post("/api/sessions/purge", { id, deleteFiles }),
+
+    purgeAllSessions: (deleteFiles = false) =>
+      post("/api/sessions/purge-all", { deleteFiles }),
+
     getSettings: () => fetch("/api/settings").then((response) => response.json()),
 
     listAgents: () => fetch("/api/agents").then((response) => response.json()),

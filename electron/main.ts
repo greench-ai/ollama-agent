@@ -28,6 +28,7 @@ import {
   type SettingsPatch,
 } from "../src/core/settings.ts";
 import { importTweakcnTheme } from "../src/core/theme.ts";
+import { purgeAllSessions, purgeSession } from "../src/core/purge.ts";
 import { readProjectFile } from "../src/core/files.ts";
 import {
   MAX_ATTACHMENTS,
@@ -745,6 +746,34 @@ function registerIpc(): void {
     return statePayload();
   });
 
+  ipcMain.handle("sessions:purge", async (_event, payload: unknown) => {
+    if (busy) throw new Error("Stop the current turn before purging sessions.");
+    const body = asRecord(payload);
+    const id = typeof body.id === "string" ? body.id : "";
+    if (!id) throw new Error("Missing session id.");
+    await background.purgeSessions([id]);
+    const result = await purgeSession(id, {
+      deleteFiles: body.deleteFiles === true,
+    });
+    if (agent.session.id === id) {
+      const next = await Session.create({ cwd: options.cwd, model: agent.model });
+      agent.restore(next, []);
+    }
+    return { ...statePayload(), purge: result };
+  });
+
+  ipcMain.handle("sessions:purge-all", async (_event, payload: unknown) => {
+    if (busy) throw new Error("Stop the current turn before purging sessions.");
+    const body = asRecord(payload);
+    await background.purgeSessions("all");
+    const result = await purgeAllSessions({
+      deleteFiles: body.deleteFiles === true,
+    });
+    const next = await Session.create({ cwd: options.cwd, model: agent.model });
+    agent.restore(next, []);
+    return { ...statePayload(), purge: result };
+  });
+
   ipcMain.handle("settings:get", () => settings);
 
   ipcMain.handle("settings:update", async (_event, payload: unknown) => {
@@ -1192,6 +1221,12 @@ async function createWindow(): Promise<void> {
             if (button) button.click();
             const first = document.querySelector(".artifact-item");
             if (first) first.click();
+          `);
+          await new Promise((resolve) => setTimeout(resolve, 800));
+        }
+        if (process.env.AGENT_SMOKE_PURGE) {
+          await mainWindow?.webContents.executeJavaScript(`
+            document.getElementById("purge-all-sessions")?.click();
           `);
           await new Promise((resolve) => setTimeout(resolve, 800));
         }

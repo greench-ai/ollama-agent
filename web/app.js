@@ -93,6 +93,17 @@
   const aboutUpdateStatus = $("about-update-status");
   const updateCheck = $("update-check");
   const updateInstall = $("update-install");
+  const purgeAllBtn = $("purge-all-sessions");
+  const purgeModal = $("purge-modal");
+  const purgeTitle = $("purge-title");
+  const purgeMessage = $("purge-message");
+  const purgeDeleteFiles = $("purge-delete-files");
+  const purgeFilesLabel = $("purge-files-label");
+  const purgeError = $("purge-error");
+  const purgeConfirm = $("purge-confirm");
+  const purgeCancel = $("purge-cancel");
+  const purgeClose = $("purge-close");
+  let pendingPurge = null;
   const projectBtn = $("project-btn");
   const projectName = $("project-name");
   const artifactsBtn = $("artifacts-btn");
@@ -1200,14 +1211,49 @@
     });
   }
 
-  async function removeSession(session) {
-    if (!confirm(`Delete “${session.title || "New chat"}”? This removes its transcript.`)) {
-      return;
+  function showPurgeError(message) {
+    purgeError.hidden = !message;
+    purgeError.textContent = message || "";
+  }
+
+  function openPurge(target) {
+    pendingPurge = target;
+    purgeTitle.textContent = target.all ? "Purge all sessions" : "Purge session";
+    purgeMessage.textContent = target.all
+      ? "Purge every local session? This removes all transcripts, checkpoints, telemetry, team data, and background job records."
+      : `Purge “${target.title}”? This removes its transcript and all associated session data.`;
+    purgeDeleteFiles.checked = false;
+    if (purgeFilesLabel) {
+      purgeFilesLabel.textContent = target.all
+        ? "any of these sessions"
+        : "this session";
     }
+    showPurgeError("");
+    purgeConfirm.disabled = false;
+    purgeConfirm.textContent = "Purge";
+    purgeModal.hidden = false;
+    purgeConfirm.focus();
+  }
+
+  function closePurge() {
+    purgeModal.hidden = true;
+    pendingPurge = null;
+  }
+
+  async function runPurge() {
+    if (!pendingPurge) return;
+    const target = pendingPurge;
+    const deleteFiles = purgeDeleteFiles.checked;
+    purgeConfirm.disabled = true;
+    purgeConfirm.textContent = "Purging…";
+    showPurgeError("");
     try {
-      const next = await bridge.deleteSession(session.id);
-      if (session.id === state.sessionId) {
-        applyState(next);
+      const next = target.all
+        ? await bridge.purgeAllSessions(deleteFiles)
+        : await bridge.purgeSession(target.id, deleteFiles);
+      const wasCurrent = target.all || target.id === state.sessionId;
+      applyState(next);
+      if (wasCurrent) {
         state.title = "New chat";
         titleEl.textContent = state.title;
         thread.innerHTML = "";
@@ -1215,11 +1261,45 @@
         clearContext();
         setHasChat(false);
       }
+      closePurge();
+      if (target.all) closeModal();
       await refreshSessions();
       void refreshTeam();
+      const result = next.purge;
+      const count = result?.sessions ?? (target.all ? "all" : 1);
+      const files = deleteFiles
+        ? "project files were restored where possible"
+        : "project files were kept";
+      addNotice(`Purged ${count} session(s); ${files}.`);
+      if (result?.warnings?.length) {
+        addNotice(`Purge warnings: ${result.warnings.join(" ")}`);
+      }
     } catch (error) {
-      addError(error instanceof Error ? error.message : String(error));
+      showPurgeError(error instanceof Error ? error.message : String(error));
+    } finally {
+      purgeConfirm.disabled = false;
+      purgeConfirm.textContent = "Purge";
     }
+  }
+
+  if (purgeAllBtn) {
+    purgeAllBtn.addEventListener("click", () => {
+      openPurge({ all: true, title: "all sessions" });
+    });
+  }
+  purgeConfirm.addEventListener("click", () => void runPurge());
+  purgeCancel.addEventListener("click", closePurge);
+  purgeClose.addEventListener("click", closePurge);
+  purgeModal.addEventListener("click", (event) => {
+    if (event.target === purgeModal) closePurge();
+  });
+
+  async function removeSession(session) {
+    openPurge({
+      all: false,
+      id: session.id,
+      title: session.title || "New chat",
+    });
   }
 
   async function selectSession(id) {
@@ -2901,6 +2981,13 @@
     if (event.target === modal) closeModal();
   });
   document.addEventListener("keydown", (event) => {
+    if (!purgeModal.hidden) {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        closePurge();
+      }
+      return;
+    }
     if (!modal.hidden) {
       if (event.key === "Escape") {
         event.preventDefault();

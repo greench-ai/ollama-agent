@@ -166,6 +166,61 @@ export class CheckpointStore {
     return summaries;
   }
 
+  /**
+   * Restore the state before the earliest checkpoint of each touched file.
+   * Used when purging a session with the "delete files" option.
+   */
+  async restoreInitial(): Promise<string> {
+    let entries;
+    try {
+      entries = await readdir(this.entriesDir, { withFileTypes: true });
+    } catch {
+      return "No checkpoints to restore.";
+    }
+    const ids = entries
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => entry.name)
+      .sort();
+    const earliest = new Map<string, CheckpointFile>();
+    for (const id of ids) {
+      try {
+        const checkpoint = JSON.parse(
+          await readFile(path.join(this.entriesDir, id, "checkpoint.json"), "utf8"),
+        ) as Checkpoint;
+        for (const file of checkpoint.files ?? []) {
+          if (!earliest.has(file.path)) earliest.set(file.path, file);
+        }
+      } catch {
+        // Skip corrupt checkpoints.
+      }
+    }
+    if (earliest.size === 0) return "No checkpointed files to restore.";
+    const lines: string[] = [
+      `Restored ${earliest.size} file(s) to their pre-session state.`,
+    ];
+    for (const file of earliest.values()) {
+      try {
+        if (!file.existed) {
+          await rm(file.path, { force: true });
+          lines.push(`  removed ${file.path}`);
+          continue;
+        }
+        if (!file.backup) {
+          lines.push(`  skipped ${file.path}: ${file.note ?? "no backup"}`);
+          continue;
+        }
+        await mkdir(path.dirname(file.path), { recursive: true });
+        await copyFile(file.backup, file.path);
+        lines.push(`  restored ${file.path}`);
+      } catch (error) {
+        lines.push(
+          `  failed ${file.path}: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
+    }
+    return lines.join("\n");
+  }
+
   async restore(id: string): Promise<string> {
     const safe = path.basename(id);
     const entryDir = path.join(this.entriesDir, safe);

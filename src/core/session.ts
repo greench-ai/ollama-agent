@@ -56,6 +56,19 @@ export async function deleteSessionTitle(id: string): Promise<void> {
   await writeSessionTitles(titles);
 }
 
+/** Remove a session title and every subagent/team title derived from it. */
+export async function deleteSessionTitlePrefix(prefix: string): Promise<void> {
+  const titles = await readSessionTitles();
+  let changed = false;
+  for (const key of Object.keys(titles)) {
+    if (key === prefix || key.startsWith(`${prefix}-`)) {
+      delete titles[key];
+      changed = true;
+    }
+  }
+  if (changed) await writeSessionTitles(titles);
+}
+
 export type SessionRecord =
   | { type: "meta"; id: string; createdAt: string; cwd: string; model: string }
   | { type: "message"; message: Message }

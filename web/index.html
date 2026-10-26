@@ -231,6 +231,7 @@
         cursor: pointer;
       }
       .mcp-status:hover { background: var(--surface); color: var(--text); }
+      .purge-card { width: min(560px, 100%); }
       .custom-theme-box {
         display: flex;
         flex-direction: column;
@@ -1238,6 +1239,13 @@
           <div class="modal-actions">
             <button id="settings-save" class="send" type="button">Save</button>
           </div>
+          <div class="hint">
+            Session transcripts and agent data are stored locally under
+            ~/.local/share/ollama-agent.
+          </div>
+          <div class="modal-actions">
+            <button id="purge-all-sessions" type="button">Purge all sessions…</button>
+          </div>
         </div>
 
         <div class="tab-panels" data-panel="connectors" hidden>
@@ -1403,6 +1411,34 @@
           <div class="modal-actions">
             <button type="button" id="update-check">Check for updates</button>
             <button type="button" id="update-install" class="send" hidden>Restart to update</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="modal" id="purge-modal" hidden>
+      <div class="modal-card purge-card" role="dialog" aria-modal="true" aria-labelledby="purge-title">
+        <div class="modal-head">
+          <div class="modal-title" id="purge-title">Purge session</div>
+          <div class="spacer"></div>
+          <button class="icon" id="purge-close" title="Close">×</button>
+        </div>
+        <div style="padding: 16px; display: flex; flex-direction: column; gap: 12px">
+          <p id="purge-message" style="margin: 0"></p>
+          <label class="field checkbox">
+            <input type="checkbox" id="purge-delete-files" />
+            Also delete project files changed by <span id="purge-files-label">this session</span>
+          </label>
+          <div class="hint">
+            Session transcripts, checkpoints, telemetry, team data, and background
+            job records are always removed. Without this option, project files
+            are left exactly as they are. With it, files are restored from the
+            session checkpoints on a best-effort basis.
+          </div>
+          <div class="notice error" id="purge-error" hidden></div>
+          <div class="modal-actions">
+            <button id="purge-cancel" type="button">Cancel</button>
+            <button id="purge-confirm" class="send" type="button">Purge</button>
           </div>
         </div>
       </div>

@@ -34,6 +34,12 @@ const bridge = {
 
   deleteSession: (id: string) => ipcRenderer.invoke("sessions:delete", { id }),
 
+  purgeSession: (id: string, deleteFiles = false) =>
+    ipcRenderer.invoke("sessions:purge", { id, deleteFiles }),
+
+  purgeAllSessions: (deleteFiles = false) =>
+    ipcRenderer.invoke("sessions:purge-all", { deleteFiles }),
+
   getSettings: () => ipcRenderer.invoke("settings:get"),
 
   listAgents: () => ipcRenderer.invoke("agents:list"),

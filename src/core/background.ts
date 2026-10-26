@@ -536,6 +536,32 @@ export class BackgroundManager {
     return `Cancelled job ${id}.`;
   }
 
+  /** Cancel and forget jobs belonging to the given sessions (or all jobs). */
+  async purgeSessions(target: string[] | "all"): Promise<number> {
+    const state = await this.ensureState();
+    const ids = target === "all" ? undefined : new Set(target);
+    const matching = state.jobs.filter((job) =>
+      ids
+        ? typeof job.sessionId === "string" && ids.has(job.sessionId)
+        : true,
+    );
+    for (const job of matching) {
+      if (job.status === "running") {
+        await this.cancel(job.id).catch(() => {});
+      }
+    }
+    const current = await this.ensureState();
+    const before = current.jobs.length;
+    current.jobs = current.jobs.filter((job) =>
+      ids
+        ? !(typeof job.sessionId === "string" && ids.has(job.sessionId))
+        : false,
+    );
+    await this.save();
+    this.emit();
+    return before - current.jobs.length;
+  }
+
   async transcript(id: string): Promise<Message[]> {
     const state = await this.ensureState();
     const job = state.jobs.find((entry) => entry.id === id);

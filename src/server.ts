@@ -28,6 +28,7 @@ import {
   type SettingsPatch,
 } from "./core/settings.ts";
 import { importTweakcnTheme } from "./core/theme.ts";
+import { purgeAllSessions, purgeSession } from "./core/purge.ts";
 import { readProjectFile } from "./core/files.ts";
 import {
   MAX_ATTACHMENTS,
@@ -874,6 +875,57 @@ async function main(): Promise<void> {
           agent.restore(next, []);
         }
         json(response, 200, statePayload());
+        return;
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/sessions/purge") {
+        if (busy) {
+          json(response, 409, { error: "Stop the current turn before purging sessions." });
+          return;
+        }
+        const body = await readJson(request);
+        const id = typeof body.id === "string" ? body.id : "";
+        if (!id) {
+          json(response, 400, { error: "Missing session id." });
+          return;
+        }
+        try {
+          await background.purgeSessions([id]);
+          const result = await purgeSession(id, {
+            deleteFiles: body.deleteFiles === true,
+          });
+          if (agent.session.id === id) {
+            const next = await Session.create({
+              cwd: options.cwd,
+              model: agent.model,
+            });
+            agent.restore(next, []);
+          }
+          json(response, 200, { ...statePayload(), purge: result });
+        } catch (error) {
+          json(response, 400, {
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
+        return;
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/sessions/purge-all") {
+        if (busy) {
+          json(response, 409, { error: "Stop the current turn before purging sessions." });
+          return;
+        }
+        const body = await readJson(request);
+        await background.purgeSessions("all");
+        const result = await purgeAllSessions({
+          deleteFiles: body.deleteFiles === true,
+        });
+        const next = await Session.create({
+          cwd: options.cwd,
+          model: agent.model,
+        });
+        agent.restore(next, []);
+        json(response, 200, { ...statePayload(), purge: result });
         return;
       }
 
