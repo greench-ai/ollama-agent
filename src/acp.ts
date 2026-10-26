@@ -28,7 +28,7 @@ import { loadMcpConfig } from "./mcp/config.ts";
 import { McpManager } from "./mcp/manager.ts";
 import { allTools } from "./tools/index.ts";
 
-const VERSION = "0.1.5";
+const VERSION = "0.2.0";
 const PROTOCOL_VERSION = 1;
 
 interface AcpOptions {
