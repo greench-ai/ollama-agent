@@ -348,17 +348,23 @@ async function main(): Promise<void> {
 
   const background = await BackgroundManager.load({
     createAgent: async ({ cwd, model: jobModel, mode, title }) => {
-      const instructions = await loadProjectInstructions(cwd);
+      const [instructions, jobDefinitions, jobSkills, jobHooks] =
+        await Promise.all([
+          loadProjectInstructions(cwd),
+          loadAgentDefinitions(cwd),
+          loadSkills(cwd),
+          HooksEngine.load(cwd),
+        ]);
       return createBackgroundAgent({
         provider,
         tools: [...allTools, ...(mcp?.tools ?? [])],
-        system: `${buildSystemPrompt(cwd, instructions)}\n\n${agentCatalogPrompt(agentDefinitions)}`,
+        system: `${buildSystemPrompt(cwd, instructions)}\n\n${agentCatalogPrompt(jobDefinitions)}`,
         cwd,
         model: jobModel,
         mode,
-        agentDefinitions,
-        skills,
-        hooks,
+        agentDefinitions: jobDefinitions,
+        skills: jobSkills,
+        hooks: jobHooks,
         onEvent: (event) => {
           if (event.type === "error") {
             stream?.send("background_event", {

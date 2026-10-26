@@ -7,9 +7,8 @@ import { Agent, type AgentEvent } from "./core/agent.ts";
 import {
   agentCatalogPrompt,
   loadAgentDefinitions,
-  type AgentDefinition,
 } from "./core/agent-definitions.ts";
-import { loadSkills, type SkillDefinition } from "./core/skills.ts";
+import { loadSkills } from "./core/skills.ts";
 import { HooksEngine } from "./core/hooks.ts";
 import { OllamaProvider } from "./core/ollama.ts";
 import {
@@ -19,7 +18,11 @@ import {
   type PermissionMode,
 } from "./core/permissions.ts";
 import { Session } from "./core/session.ts";
-import { assertDirectory } from "./core/project.ts";
+import {
+  assertDirectory,
+  buildSystemPrompt,
+  loadProjectInstructions,
+} from "./core/project.ts";
 import type { ImageAttachment } from "./core/types.ts";
 import { loadMcpConfig } from "./mcp/config.ts";
 import { McpManager } from "./mcp/manager.ts";
@@ -264,21 +267,6 @@ export function toolKind(name: string): string {
   return "other";
 }
 
-function acpSystemPrompt(cwd: string): string {
-  return `You are a coding agent exposed over the Agent Client Protocol, powered by an Ollama model.
-
-Environment
-- Working directory: ${cwd}
-- Platform: ${process.platform}
-
-Working rules
-- Use absolute file paths.
-- Read a file before editing it.
-- Prefer Read, Grep, and Glob over shell equivalents.
-- Keep changes minimal and consistent with the surrounding code.
-- When finished, state what changed and what you verified.`;
-}
-
 export function promptText(
   blocks: unknown[],
 ): { text: string; images: ImageAttachment[] } {
@@ -349,11 +337,6 @@ async function main(): Promise<void> {
     }
   }
 
-  const agentDefinitions: Map<string, AgentDefinition> =
-    await loadAgentDefinitions(cwd);
-  const skills: Map<string, SkillDefinition> = await loadSkills(cwd);
-  const hooks = await HooksEngine.load(cwd);
-  const baseSystem = `${acpSystemPrompt(cwd)}\n\n${agentCatalogPrompt(agentDefinitions)}`;
   const tools = [...allTools, ...(mcp?.tools ?? [])];
   const sessions = new Map<string, AcpSession>();
   const connection = new JsonRpcConnection();
@@ -428,6 +411,14 @@ async function main(): Promise<void> {
       throw new Error("session/new requires an absolute cwd.");
     }
     const sessionCwd = await assertDirectory(requestedCwd);
+    const [instructions, sessionDefinitions, sessionSkills, sessionHooks] =
+      await Promise.all([
+        loadProjectInstructions(sessionCwd),
+        loadAgentDefinitions(sessionCwd),
+        loadSkills(sessionCwd),
+        HooksEngine.load(sessionCwd),
+      ]);
+    const system = `${buildSystemPrompt(sessionCwd, instructions)}\n\n${agentCatalogPrompt(sessionDefinitions)}`;
     const session = await Session.create({ cwd: sessionCwd, model });
     const acpSession: AcpSession = {
       id: session.id,
@@ -448,12 +439,12 @@ async function main(): Promise<void> {
       permissions: acpSession.permission,
       session,
       cwd: sessionCwd,
-      system: baseSystem,
+      system,
       think: options.think,
       numCtx: options.numCtx,
-      agentDefinitions,
-      skills,
-      hooks,
+      agentDefinitions: sessionDefinitions,
+      skills: sessionSkills,
+      hooks: sessionHooks,
       onEvent: (event: AgentEvent) => {
         switch (event.type) {
           case "text": {
