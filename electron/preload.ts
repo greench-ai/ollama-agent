@@ -55,6 +55,18 @@ const bridge = {
 
   mcpLogout: (name: string) => ipcRenderer.invoke("mcp:logout", { name }),
 
+  checkForUpdates: () => ipcRenderer.invoke("update:check"),
+
+  updateStatus: () => ipcRenderer.invoke("update:status"),
+
+  installUpdate: () => ipcRenderer.invoke("update:install"),
+
+  pickProject: () => ipcRenderer.invoke("project:pick"),
+
+  setProject: (path: string) => ipcRenderer.invoke("project:set", { path }),
+
+  readFile: (path: string) => ipcRenderer.invoke("file:read", { path }),
+
   chat: async (
     message: string,
     images: Array<{ data: string; mimeType: string; name?: string }>,

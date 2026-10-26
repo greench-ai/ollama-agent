@@ -60,6 +60,19 @@
   const aboutCwd = $("about-cwd");
   const aboutSession = $("about-session");
   const aboutMcp = $("about-mcp");
+  const aboutVersion = $("about-version");
+  const aboutInstructions = $("about-instructions");
+  const aboutUpdateStatus = $("about-update-status");
+  const updateCheck = $("update-check");
+  const updateInstall = $("update-install");
+  const projectBtn = $("project-btn");
+  const projectName = $("project-name");
+  const artifactsBtn = $("artifacts-btn");
+  const artifactsCount = $("artifact-count");
+  const artifactsPanel = $("artifacts");
+  const artifactsClose = $("artifacts-close");
+  const artifactsList = $("artifacts-list");
+  const artifactsPreview = $("artifacts-preview");
 
   if (!bridge) {
     thread.appendChild(
@@ -101,6 +114,11 @@
     sessionFile: "",
     mcpPath: "",
     mcpData: { path: "", servers: [], configs: {} },
+    version: "",
+    projectInstructions: null,
+    artifacts: new Map(),
+    artifactPath: null,
+    updater: null,
   };
 
   let current = null;
@@ -386,6 +404,7 @@
 
   function renderHistory(messages) {
     thread.innerHTML = "";
+    clearArtifacts();
     const results = new Map();
     for (const message of messages) {
       for (const block of message.content || []) {
@@ -432,6 +451,13 @@
           buffer += block.text;
         } else if (block.type === "tool_use") {
           flush();
+          if (
+            ["Write", "Edit", "MultiEdit"].includes(block.name) &&
+            block.input &&
+            typeof block.input.file_path === "string"
+          ) {
+            addArtifact(block.input.file_path);
+          }
           const result = results.get(block.id);
           addToolCard(
             wrap,
@@ -499,6 +525,13 @@
         break;
       case "tool_start":
         if (!current) startAssistant();
+        if (
+          ["Write", "Edit", "MultiEdit"].includes(data.name) &&
+          data.input &&
+          typeof data.input.file_path === "string"
+        ) {
+          addArtifact(data.input.file_path);
+        }
         current.tool = addToolCard(
           current.wrap,
           data.name,
@@ -523,6 +556,9 @@
         state.title = data.title || "New chat";
         titleEl.textContent = state.title;
         refreshSessions();
+        break;
+      case "update_status":
+        renderUpdater(data);
         break;
       case "approval":
         addApproval(data);
@@ -753,6 +789,7 @@
         state.title = "New chat";
         titleEl.textContent = state.title;
         thread.innerHTML = "";
+        clearArtifacts();
         setHasChat(false);
       }
       await refreshSessions();
@@ -792,6 +829,7 @@
       state.title = "New chat";
       titleEl.textContent = state.title;
       thread.innerHTML = "";
+      clearArtifacts();
       setHasChat(false);
       await refreshSessions();
       input.focus();
@@ -924,7 +962,17 @@
       state.settings = { ...state.settings, ...data.settings };
       applyTheme(state.settings.theme, false);
     }
-    if (data.cwd) state.cwd = data.cwd;
+    if (data.cwd) {
+      state.cwd = data.cwd;
+      updateProjectLabel();
+    }
+    if (data.version) {
+      state.version = String(data.version);
+      aboutVersion.textContent = state.version;
+    }
+    if (data.projectInstructions !== undefined) {
+      state.projectInstructions = data.projectInstructions;
+    }
     if (data.mcpPath) state.mcpPath = data.mcpPath;
     if (Array.isArray(data.mcp)) updateMcp(data.mcp);
   }
@@ -944,6 +992,236 @@
       )
       .join("\n");
   }
+
+  /* ---------- project, artifacts, updates ---------- */
+
+  function updateProjectLabel() {
+    const parts = String(state.cwd || "")
+      .split(/[\\/]/)
+      .filter(Boolean);
+    projectName.textContent = parts.length > 0 ? parts[parts.length - 1] : "…";
+    projectBtn.title = state.cwd || "Change project folder";
+  }
+
+  async function chooseProject() {
+    if (state.running) {
+      addNotice("Stop the current turn before switching projects.");
+      return;
+    }
+    let target;
+    try {
+      target = bridge.pickProject
+        ? await bridge.pickProject()
+        : window.prompt("Project folder", state.cwd || "");
+    } catch (error) {
+      addError(error instanceof Error ? error.message : String(error));
+      return;
+    }
+    if (!target) return;
+    try {
+      const data = await bridge.setProject(target);
+      applyState(data);
+      state.sessionId = sessionIdFromPath(data.session) || state.sessionId;
+      state.title = "New chat";
+      titleEl.textContent = state.title;
+      thread.innerHTML = "";
+      clearArtifacts();
+      setHasChat(false);
+      await refreshSessions();
+      input.focus();
+    } catch (error) {
+      addError(error instanceof Error ? error.message : String(error));
+    }
+  }
+
+  function relativePath(filePath) {
+    if (!filePath) return "";
+    const root = String(state.cwd || "").replace(/[\\/]+$/, "");
+    if (root && (filePath === root || filePath.startsWith(`${root}/`) || filePath.startsWith(`${root}\\`))) {
+      return filePath.slice(root.length + 1);
+    }
+    return filePath;
+  }
+
+  function addArtifact(filePath) {
+    if (typeof filePath !== "string" || !filePath) return;
+    if (!state.artifacts.has(filePath)) {
+      state.artifacts.set(filePath, { path: filePath });
+      renderArtifactList();
+    }
+    updateArtifactsButton();
+  }
+
+  function updateArtifactsButton() {
+    const count = state.artifacts.size;
+    artifactsCount.textContent = String(count);
+    artifactsBtn.hidden = count === 0;
+    if (count === 0 && !artifactsPanel.hidden) setArtifactsOpen(false);
+  }
+
+  function setArtifactsOpen(open) {
+    artifactsPanel.hidden = !open;
+    document.body.classList.toggle("artifacts-open", open);
+    if (open) renderArtifactList();
+  }
+
+  function renderArtifactList() {
+    artifactsList.innerHTML = "";
+    const items = [...state.artifacts.values()].sort((a, b) =>
+      relativePath(a.path).localeCompare(relativePath(b.path)),
+    );
+    if (items.length === 0) {
+      artifactsList.appendChild(el("div", "artifacts-empty", "No files yet."));
+      return;
+    }
+    for (const item of items) {
+      const row = el(
+        "div",
+        `artifact-item${item.path === state.artifactPath ? " active" : ""}`,
+      );
+      const relative = relativePath(item.path);
+      const parts = relative.split(/[\\/]/);
+      row.appendChild(el("div", "file-name", parts[parts.length - 1]));
+      row.appendChild(el("div", "file-path", relative));
+      row.addEventListener("click", () => void previewArtifact(item.path));
+      artifactsList.appendChild(row);
+    }
+  }
+
+  async function previewArtifact(filePath) {
+    state.artifactPath = filePath;
+    renderArtifactList();
+    artifactsPreview.textContent = "Loading…";
+    try {
+      const file = await bridge.readFile(filePath);
+      artifactsPreview.textContent =
+        file.content + (file.truncated ? "\n\n[truncated]" : "");
+    } catch (error) {
+      artifactsPreview.textContent =
+        error instanceof Error ? error.message : String(error);
+    }
+  }
+
+  function clearArtifacts() {
+    state.artifacts = new Map();
+    state.artifactPath = null;
+    artifactsPreview.textContent = "Select a file to preview.";
+    renderArtifactList();
+    updateArtifactsButton();
+  }
+
+  function renderUpdater(status) {
+    if (!status || typeof status !== "object") return;
+    state.updater = status;
+    if (status.currentVersion) {
+      state.version = status.currentVersion;
+      aboutVersion.textContent = status.currentVersion;
+    }
+    let text = "";
+    switch (status.state) {
+      case "checking":
+        text = "Checking for updates…";
+        break;
+      case "available":
+        text = `Update available: v${status.version || "?"} — downloading…`;
+        break;
+      case "downloading":
+        text = `Downloading update… ${status.percent ?? 0}%`;
+        break;
+      case "downloaded":
+        text = `Update v${status.version || ""} ready. Restart to install.`;
+        break;
+      case "not-available":
+        text = `Up to date (v${status.currentVersion || state.version}).`;
+        break;
+      case "error":
+        text = `Update check failed: ${status.error || "unknown error"}`;
+        break;
+      default:
+        text =
+          status.packaged === false
+            ? "Development build — use the packaged app for automatic updates."
+            : "";
+    }
+    aboutUpdateStatus.textContent = text;
+    updateInstall.hidden = !(
+      status.state === "downloaded" && status.packaged !== false
+    );
+    settingsBtn.textContent =
+      status.state === "available" || status.state === "downloaded"
+        ? "Settings •"
+        : "Settings";
+  }
+
+  function renderCheck(info) {
+    if (!info) return;
+    if (info.currentVersion) {
+      state.version = info.currentVersion;
+      aboutVersion.textContent = info.currentVersion;
+    }
+    if (info.error) {
+      aboutUpdateStatus.textContent = `Could not check: ${info.error}`;
+    } else if (info.available) {
+      aboutUpdateStatus.textContent = `Update available: v${info.latestVersion} (current v${info.currentVersion}).`;
+    } else {
+      aboutUpdateStatus.textContent = `Up to date (v${info.currentVersion}).`;
+    }
+    if (info.updater) {
+      const updater = {
+        ...info.updater,
+        currentVersion: info.currentVersion,
+        packaged: info.packaged,
+      };
+      const meaningful = ["available", "downloading", "downloaded", "error"].includes(
+        updater.state,
+      );
+      if (meaningful) {
+        renderUpdater(updater);
+      } else {
+        state.updater = updater;
+        updateInstall.hidden = true;
+        settingsBtn.textContent = "Settings";
+      }
+    } else {
+      updateInstall.hidden = true;
+    }
+  }
+
+  async function refreshUpdateStatus() {
+    try {
+      renderUpdater(await bridge.updateStatus());
+    } catch {
+      // Status is best effort.
+    }
+  }
+
+  projectBtn.addEventListener("click", () => void chooseProject());
+  artifactsBtn.addEventListener("click", () => setArtifactsOpen(artifactsPanel.hidden));
+  artifactsClose.addEventListener("click", () => setArtifactsOpen(false));
+  updateCheck.addEventListener("click", async () => {
+    updateCheck.disabled = true;
+    const label = updateCheck.textContent;
+    updateCheck.textContent = "Checking…";
+    try {
+      renderCheck(await bridge.checkForUpdates());
+    } catch (error) {
+      aboutUpdateStatus.textContent =
+        error instanceof Error ? error.message : String(error);
+    } finally {
+      updateCheck.disabled = false;
+      updateCheck.textContent = label;
+    }
+  });
+  updateInstall.addEventListener("click", async () => {
+    updateInstall.disabled = true;
+    try {
+      await bridge.installUpdate();
+    } catch (error) {
+      aboutUpdateStatus.textContent =
+        error instanceof Error ? error.message : String(error);
+      updateInstall.disabled = false;
+    }
+  });
 
   function populateModels(data, current) {
     const models = (data && data.models) || [];
@@ -982,6 +1260,9 @@
     aboutCwd.textContent = state.cwd || "—";
     aboutSession.textContent = state.sessionFile || "—";
     aboutMcp.textContent = state.mcpPath || "—";
+    aboutVersion.textContent = state.version || "—";
+    aboutInstructions.textContent = state.projectInstructions || "none";
+    void refreshUpdateStatus();
   }
 
   function openModal(tab) {
@@ -1396,6 +1677,8 @@
       const stateData = await bridge.getState();
       applyState(stateData);
       titleEl.textContent = state.title;
+      updateProjectLabel();
+      updateArtifactsButton();
     } catch (error) {
       addError(error instanceof Error ? error.message : String(error));
     }

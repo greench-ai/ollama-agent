@@ -22,6 +22,14 @@ import {
   renameSession,
 } from "./core/sessions.ts";
 import { loadSettings, updateSettings, type AppSettings } from "./core/settings.ts";
+import { readProjectFile } from "./core/files.ts";
+import {
+  assertDirectory,
+  buildSystemPrompt,
+  loadProjectInstructions,
+  type ProjectInstructions,
+} from "./core/project.ts";
+import { checkForLatestRelease } from "./core/updates.ts";
 import { loadMcpConfig, type McpServerConfig } from "./mcp/config.ts";
 import {
   defaultMcpConfigPath,
@@ -154,6 +162,10 @@ function json(response: ServerResponse, status: number, value: unknown): void {
 
 async function main(): Promise<void> {
   const options = parseOptions(process.argv.slice(2));
+  const packageJson = JSON.parse(
+    await readFile(new URL("../package.json", import.meta.url), "utf8"),
+  ) as { version?: string };
+  const appVersion = packageJson.version ?? "0.0.0";
   const provider = new OllamaProvider({
     host: options.host ?? process.env.OLLAMA_HOST ?? "http://127.0.0.1:11434",
     apiKey: options.apiKey ?? process.env.OLLAMA_API_KEY,
@@ -169,6 +181,8 @@ async function main(): Promise<void> {
   }
 
   const session = await Session.create({ cwd: options.cwd, model });
+  let projectInstructions: ProjectInstructions | undefined =
+    await loadProjectInstructions(options.cwd);
   let mcpConfigPath = defaultMcpConfigPath();
   let mcp: McpManager | undefined;
   if (!options.noMcp) {
@@ -249,7 +263,7 @@ async function main(): Promise<void> {
     permissions,
     session,
     cwd: options.cwd,
-    system: `You are a coding agent working in ${options.cwd}. Use absolute paths, read files before editing them, prefer Read/Grep/Glob over shell equivalents, and summarize what you changed when you finish.`,
+    system: buildSystemPrompt(options.cwd, projectInstructions),
     planApprover,
     onEvent: (event: AgentEvent) => {
       if (!stream) return;
@@ -324,6 +338,8 @@ async function main(): Promise<void> {
       mode: settings.mode,
     },
     mcpPath: mcpConfigPath,
+    version: appVersion,
+    projectInstructions: projectInstructions?.path ?? null,
   });
 
   const mcpListPayload = async () => {
@@ -476,6 +492,69 @@ async function main(): Promise<void> {
         }
         await clearToken(name);
         json(response, 200, await mcpListPayload());
+        return;
+      }
+
+      if (request.method === "GET" && url.pathname === "/api/update/status") {
+        json(response, 200, {
+          currentVersion: appVersion,
+          packaged: false,
+          state: "idle",
+        });
+        return;
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/update/check") {
+        json(response, 200, await checkForLatestRelease(appVersion));
+        return;
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/update/install") {
+        json(response, 501, {
+          error: "Updates are installed by the desktop app.",
+        });
+        return;
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/project/set") {
+        if (busy) {
+          json(response, 409, { error: "Stop the current turn first." });
+          return;
+        }
+        const body = await readJson(request);
+        const raw = typeof body.path === "string" ? body.path : "";
+        if (!raw) {
+          json(response, 400, { error: "Missing project path." });
+          return;
+        }
+        const directory = await assertDirectory(raw);
+        options.cwd = directory;
+        agent.cwd = directory;
+        projectInstructions = await loadProjectInstructions(directory);
+        agent.system = buildSystemPrompt(directory, projectInstructions);
+
+        const next = await Session.create({ cwd: directory, model: agent.model });
+        agent.restore(next, []);
+
+        if (!options.noMcp && !options.mcpConfig) {
+          try {
+            const config = await loadMcpConfig(undefined, directory);
+            mcpConfigPath = config.path ?? defaultMcpConfigPath();
+            await applyMcpServers(config.servers);
+          } catch (error) {
+            console.error(
+              `MCP config: ${error instanceof Error ? error.message : error}`,
+            );
+          }
+        }
+
+        json(response, 200, { ...statePayload(), title: "New chat" });
+        return;
+      }
+
+      if (request.method === "GET" && url.pathname === "/api/file") {
+        const requested = url.searchParams.get("path") ?? "";
+        json(response, 200, await readProjectFile(agent.cwd, requested));
         return;
       }
 

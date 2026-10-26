@@ -23,6 +23,14 @@ import {
   renameSession,
 } from "../src/core/sessions.ts";
 import { loadSettings, updateSettings, type AppSettings } from "../src/core/settings.ts";
+import { readProjectFile } from "../src/core/files.ts";
+import {
+  assertDirectory,
+  buildSystemPrompt,
+  loadProjectInstructions,
+  type ProjectInstructions,
+} from "../src/core/project.ts";
+import { checkForLatestRelease } from "../src/core/updates.ts";
 import { loadMcpConfig, type McpServerConfig } from "../src/mcp/config.ts";
 import {
   defaultMcpConfigPath,
@@ -107,7 +115,35 @@ let permissions: PermissionEngine;
 let session: Session;
 let settings: AppSettings;
 let mcpConfigPath: string;
+let projectInstructions: ProjectInstructions | undefined;
 let mcp: McpManager | undefined;
+
+type UpdaterStateName =
+  | "idle"
+  | "checking"
+  | "available"
+  | "not-available"
+  | "downloading"
+  | "downloaded"
+  | "error";
+
+interface UpdaterState {
+  state: UpdaterStateName;
+  version?: string;
+  percent?: number;
+  error?: string;
+}
+
+let updaterState: UpdaterState = { state: "idle" };
+
+function publishUpdaterState(next: UpdaterState): void {
+  updaterState = next;
+  sendEvent("update_status", {
+    ...next,
+    currentVersion: app.getVersion(),
+    packaged: app.isPackaged,
+  });
+}
 let busy = false;
 let currentRun: AbortController | null = null;
 const approvals = new Map<string, (outcome: AskOutcome) => void>();
@@ -182,6 +218,8 @@ function statePayload() {
       mode: settings.mode,
     },
     mcpPath: mcpConfigPath,
+    version: app.getVersion(),
+    projectInstructions: projectInstructions?.path ?? null,
   };
 }
 
@@ -275,6 +313,7 @@ function forwardAgentEvent(event: AgentEvent): void {
 
 async function initCore(): Promise<void> {
   settings = await loadSettings();
+  projectInstructions = await loadProjectInstructions(options.cwd);
   provider = new OllamaProvider({
     host: options.host ?? process.env.OLLAMA_HOST ?? "http://127.0.0.1:11434",
     apiKey: options.apiKey ?? process.env.OLLAMA_API_KEY,
@@ -321,7 +360,7 @@ async function initCore(): Promise<void> {
     permissions,
     session,
     cwd: options.cwd,
-    system: `You are a coding agent working in ${options.cwd}. Use absolute paths, read files before editing them, prefer Read/Grep/Glob over shell equivalents, and summarize what you changed when you finish.`,
+    system: buildSystemPrompt(options.cwd, projectInstructions),
     planApprover,
     onEvent: forwardAgentEvent,
   });
@@ -530,6 +569,86 @@ function registerIpc(): void {
     await clearToken(name);
     return mcpListPayload();
   });
+
+  ipcMain.handle("update:status", () => ({
+    currentVersion: app.getVersion(),
+    packaged: app.isPackaged,
+    ...updaterState,
+  }));
+
+  ipcMain.handle("update:check", async () => {
+    const info = await checkForLatestRelease(app.getVersion());
+    if (app.isPackaged) {
+      publishUpdaterState({ state: "checking" });
+      try {
+        await autoUpdater.checkForUpdates();
+      } catch (error) {
+        publishUpdaterState({
+          state: "error",
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+    return {
+      ...info,
+      currentVersion: app.getVersion(),
+      packaged: app.isPackaged,
+      updater: updaterState,
+    };
+  });
+
+  ipcMain.handle("update:install", () => {
+    if (updaterState.state !== "downloaded") {
+      throw new Error("No downloaded update is ready to install.");
+    }
+    setImmediate(() => autoUpdater.quitAndInstall());
+    return { ok: true };
+  });
+
+  ipcMain.handle("project:pick", async () => {
+    if (!mainWindow) return undefined;
+    const result = await dialog.showOpenDialog(mainWindow, {
+      properties: ["openDirectory", "createDirectory"],
+    });
+    return result.canceled ? undefined : result.filePaths[0];
+  });
+
+  ipcMain.handle("project:set", async (_event, payload: unknown) => {
+    if (busy) throw new Error("Stop the current turn before switching projects.");
+    const raw = asRecord(payload).path;
+    if (typeof raw !== "string" || !raw) throw new Error("Missing project path.");
+    const directory = await assertDirectory(raw);
+
+    options.cwd = directory;
+    agent.cwd = directory;
+    projectInstructions = await loadProjectInstructions(directory);
+    agent.system = buildSystemPrompt(directory, projectInstructions);
+
+    const next = await Session.create({ cwd: directory, model: agent.model });
+    agent.restore(next, []);
+
+    if (!options.noMcp && !options.mcpConfig) {
+      try {
+        const config = await loadMcpConfig(undefined, directory);
+        mcpConfigPath = config.path ?? defaultMcpConfigPath();
+        await applyMcpServers(config.servers);
+      } catch (error) {
+        console.error(
+          `[electron] MCP config: ${error instanceof Error ? error.message : error}`,
+        );
+      }
+    }
+
+    return { ...statePayload(), title: "New chat" };
+  });
+
+  ipcMain.handle("file:read", async (_event, payload: unknown) => {
+    const pathValue = asRecord(payload).path;
+    if (typeof pathValue !== "string" || !pathValue) {
+      throw new Error("Missing file path.");
+    }
+    return readProjectFile(agent.cwd, pathValue);
+  });
 }
 
 interface WindowState {
@@ -580,17 +699,34 @@ async function saveWindowState(win: BrowserWindow): Promise<void> {
 
 function setupUpdater(): void {
   // Only packaged builds have app-update.yml (generated by electron-builder).
-  if (!app.isPackaged) return;
+  if (!app.isPackaged) {
+    publishUpdaterState({ state: "idle" });
+    return;
+  }
   autoUpdater.autoDownload = true;
   autoUpdater.autoInstallOnAppQuit = true;
+  autoUpdater.on("checking-for-update", () => {
+    publishUpdaterState({ state: "checking" });
+  });
   autoUpdater.on("update-available", (info) => {
-    sendEvent("update", { status: "available", version: info.version });
+    publishUpdaterState({ state: "available", version: info.version });
+  });
+  autoUpdater.on("update-not-available", () => {
+    publishUpdaterState({ state: "not-available" });
+  });
+  autoUpdater.on("download-progress", (progress) => {
+    publishUpdaterState({
+      state: "downloading",
+      version: updaterState.version,
+      percent: Math.round(progress.percent),
+    });
   });
   autoUpdater.on("update-downloaded", (info) => {
-    sendEvent("update", { status: "downloaded", version: info.version });
+    publishUpdaterState({ state: "downloaded", version: info.version });
   });
   autoUpdater.on("error", (error) => {
     console.error(`[updater] ${error.message}`);
+    publishUpdaterState({ state: "error", error: error.message });
   });
   void autoUpdater
     .checkForUpdatesAndNotify()
@@ -766,6 +902,22 @@ async function createWindow(): Promise<void> {
             if (tab) tab.click();
           `);
           await new Promise((resolve) => setTimeout(resolve, 900));
+        }
+        if (process.env.AGENT_SMOKE_UPDATE) {
+          await mainWindow?.webContents.executeJavaScript(`
+            const button = document.getElementById("update-check");
+            if (button) button.click();
+          `);
+          await new Promise((resolve) => setTimeout(resolve, 2500));
+        }
+        if (process.env.AGENT_SMOKE_ARTIFACTS) {
+          await mainWindow?.webContents.executeJavaScript(`
+            const button = document.getElementById("artifacts-btn");
+            if (button) button.click();
+            const first = document.querySelector(".artifact-item");
+            if (first) first.click();
+          `);
+          await new Promise((resolve) => setTimeout(resolve, 800));
         }
         if (process.env.AGENT_SMOKE_SCREENSHOT) {
           await new Promise((resolve) => setTimeout(resolve, 1200));

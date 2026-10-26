@@ -222,6 +222,11 @@ HTTP API:
 | POST | `/api/mcp/remove` | remove `{name}` |
 | POST | `/api/mcp/reconnect` | reconnect `{name}` (or all) |
 | POST | `/api/mcp/logout` | clear the stored OAuth token for `{name}` |
+| GET | `/api/update/status` | current version and updater state |
+| POST | `/api/update/check` | check GitHub for a newer release |
+| POST | `/api/update/install` | install a downloaded update (desktop only) |
+| POST | `/api/project/set` | switch project folder `{path}` |
+| GET | `/api/file?path=` | preview a text file inside the project |
 
 SSE events: `start`, `thinking`, `text`, `tool_start`, `tool_end`, `notice`,
 `subagent_start`, `subagent_end`, `session_title`, `error`, `approval`,
@@ -350,6 +355,29 @@ The Settings dialog (sidebar → Settings) has three tabs:
 
 Connector changes are blocked while a turn is running.
 
+## Projects and artifacts
+
+The project name in the header is a button: Electron opens a native folder
+picker; the browser asks for a path. Switching projects:
+
+- changes the agent working directory and starts a new session
+- reloads `.mcp.json` from the new folder (unless `--mcp-config` was given)
+- loads project instructions from `.ollama-agent.md`, `AGENTS.md`, or
+  `CLAUDE.md` (first match, up to 20k characters) into the system prompt
+
+The **Files** button opens an artifact panel listing files written or edited in
+the conversation. Preview is served by the backend and restricted to the project
+root (2 MB, text only); attempts to read outside it are rejected.
+
+## Updates
+
+Settings → **About** shows the current version and a **Check for updates**
+button. It queries the latest GitHub release and reports whether a newer version
+exists. Packaged Electron builds additionally use `electron-updater`: an
+available update downloads automatically, and **Restart to update** appears when
+it is ready. Development builds report that automatic updates require the
+packaged app.
+
 ## Design notes
 
 - The provider interface is deliberately Anthropic-shaped (content blocks,
@@ -364,12 +392,14 @@ Connector changes are blocked while a turn is running.
 Early. Implemented: streaming, tool loop, permissions, sessions with a
 Claude-Desktop-style shell (sidebar, searchable history, rename/delete/resume,
 markdown rendering, stop button, themes), settings and connector management,
-8 built-in tools (including `Task` subagents with isolated context), image input
-(user attachments, Read on images, MCP image results), an MCP client (stdio +
-Streamable HTTP; tools, resources, prompts, pagination, annotations, reconnect,
-OAuth authorization-code + PKCE with discovery and dynamic client registration),
-a local HTTP/SSE server with the same web client, an Electron shell with a
-sandboxed renderer, IPC approvals, plan-mode propose/approve/apply, CSP,
-window-state persistence, menus, Linux packaging (AppImage + deb), cross-platform
-CI packaging (Windows NSIS/zip, macOS dmg/zip x64 + arm64), and electron-updater
-wiring. Not yet: code signing/notarization, projects, and artifacts.
+project switching with project instructions, an artifact panel, an update
+checker, 8 built-in tools (including `Task` subagents with isolated context),
+image input (user attachments, Read on images, MCP image results), an MCP client
+(stdio + Streamable HTTP; tools, resources, prompts, pagination, annotations,
+reconnect, OAuth authorization-code + PKCE with discovery and dynamic client
+registration), a local HTTP/SSE server with the same web client, an Electron
+shell with a sandboxed renderer, IPC approvals, plan-mode
+propose/approve/apply, CSP, window-state persistence, menus, Linux packaging
+(AppImage + deb), cross-platform CI packaging (Windows NSIS/zip, macOS dmg/zip
+x64 + arm64), and electron-updater wiring. Not yet: code
+signing/notarization and final UI polish.

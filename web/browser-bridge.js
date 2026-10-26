@@ -58,6 +58,24 @@
 
     mcpLogout: (name) => post("/api/mcp/logout", { name }),
 
+    updateStatus: () =>
+      fetch("/api/update/status").then((response) => response.json()),
+
+    checkForUpdates: () => post("/api/update/check", {}),
+
+    installUpdate: () => post("/api/update/install", {}),
+
+    setProject: (path) => post("/api/project/set", { path }),
+
+    async readFile(path) {
+      const response = await fetch(`/api/file?path=${encodeURIComponent(path)}`);
+      if (!response.ok) {
+        const data = await response.json().catch(() => ({}));
+        throw new Error(data.error || response.statusText);
+      }
+      return response.json();
+    },
+
     async chat(message, images, onEvent) {
       const response = await fetch("/api/chat", {
         method: "POST",

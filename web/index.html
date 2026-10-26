@@ -233,6 +233,105 @@
       .topbar select:hover { background: var(--surface); border-color: var(--border); }
       .topbar select:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 
+      .project-btn {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        max-width: 300px;
+        background: transparent;
+        border: 1px solid transparent;
+        border-radius: 8px;
+        padding: 6px 9px;
+      }
+      .project-btn:hover {
+        background: var(--surface);
+        border-color: var(--border);
+      }
+      .project-label {
+        font-size: 10.5px;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        color: var(--muted);
+      }
+      #project-name {
+        font-size: 13px;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        max-width: 180px;
+      }
+      .files-btn { font-size: 12.5px; color: var(--muted); }
+      .files-btn span { color: var(--accent); font-weight: 600; }
+
+      .artifacts {
+        position: absolute;
+        top: 54px;
+        right: 0;
+        bottom: 0;
+        width: 380px;
+        background: var(--bg-elevated);
+        border-left: 1px solid var(--border);
+        display: flex;
+        flex-direction: column;
+        z-index: 8;
+      }
+      .artifacts[hidden] { display: none; }
+      .artifacts-head {
+        display: flex;
+        align-items: center;
+        padding: 8px 12px;
+        border-bottom: 1px solid var(--border);
+      }
+      .artifacts-list {
+        overflow-y: auto;
+        max-height: 40%;
+        border-bottom: 1px solid var(--border);
+        padding: 6px;
+      }
+      .artifact-item {
+        display: flex;
+        flex-direction: column;
+        gap: 1px;
+        padding: 6px 8px;
+        border-radius: 7px;
+        cursor: pointer;
+      }
+      .artifact-item:hover { background: var(--surface); }
+      .artifact-item.active { background: var(--surface-2); }
+      .artifact-item .file-name {
+        font-size: 13px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .artifact-item .file-path {
+        font-size: 11px;
+        color: var(--muted);
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .artifacts-empty { color: var(--muted); font-size: 12.5px; padding: 10px; }
+      .artifacts-preview {
+        flex: 1;
+        margin: 0;
+        padding: 12px;
+        overflow: auto;
+        white-space: pre-wrap;
+        word-break: break-word;
+        font: 12.5px/1.55 var(--mono);
+        background: transparent;
+      }
+      body.artifacts-open .log { padding-right: 396px; }
+      body.artifacts-open .composer { margin-right: 380px; }
+      body.artifacts-open .empty { right: 380px; }
+      @media (max-width: 960px) {
+        .artifacts { width: 320px; }
+        body.artifacts-open .log { padding-right: 336px; }
+        body.artifacts-open .composer { margin-right: 320px; }
+        body.artifacts-open .empty { right: 320px; }
+      }
+
       .log {
         flex: 1;
         overflow-y: auto;
@@ -682,8 +781,15 @@
     <main class="main">
       <header class="topbar">
         <button class="icon" id="expand" title="Show sidebar" hidden>»</button>
+        <button class="project-btn" id="project-btn" title="Change project folder">
+          <span class="project-label">Project</span>
+          <span id="project-name">…</span>
+        </button>
         <div class="chat-title" id="chat-title">New chat</div>
         <div class="spacer"></div>
+        <button class="icon files-btn" id="artifacts-btn" title="Files touched in this conversation" hidden>
+          Files <span id="artifact-count">0</span>
+        </button>
         <select id="model" title="Model"></select>
         <select id="mode" title="Permission mode">
           <option value="default">default</option>
@@ -720,6 +826,16 @@
           </div>
         </div>
       </form>
+
+      <aside class="artifacts" id="artifacts" hidden>
+        <div class="artifacts-head">
+          <div class="modal-title">Files</div>
+          <div class="spacer"></div>
+          <button class="icon" id="artifacts-close" title="Close">×</button>
+        </div>
+        <div class="artifacts-list" id="artifacts-list"></div>
+        <pre class="artifacts-preview" id="artifacts-preview">Select a file to preview.</pre>
+      </aside>
     </main>
 
     <div class="modal" id="modal" hidden>
@@ -867,9 +983,16 @@
             <strong>ollama-agent</strong> — an agentic coding client for Ollama
             local and cloud models.
           </p>
+          <div class="hint">Version: <span id="about-version">—</span></div>
           <div class="hint">Working directory: <span id="about-cwd"></span></div>
+          <div class="hint">Project instructions: <span id="about-instructions"></span></div>
           <div class="hint">Session: <span id="about-session"></span></div>
           <div class="hint">Connector config: <span id="about-mcp"></span></div>
+          <div class="notice" id="about-update-status"></div>
+          <div class="modal-actions">
+            <button type="button" id="update-check">Check for updates</button>
+            <button type="button" id="update-install" class="send" hidden>Restart to update</button>
+          </div>
         </div>
       </div>
     </div>
