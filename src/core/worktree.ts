@@ -1,6 +1,13 @@
 import { exec, execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { access, lstat, mkdir, readFile, symlink } from "node:fs/promises";
+import {
+  access,
+  lstat,
+  mkdir,
+  readFile,
+  realpath,
+  symlink,
+} from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 
@@ -71,9 +78,21 @@ export async function runGit(
 export async function repoInfo(cwd: string): Promise<RepoInfo | undefined> {
   const top = await runGit(cwd, ["rev-parse", "--show-toplevel"]);
   if (top.code !== 0) return undefined;
-  const root = top.stdout.trim();
-  if (!root) return undefined;
-  const relative = path.relative(root, path.resolve(cwd));
+  const reported = top.stdout.trim();
+  if (!reported) return undefined;
+  let root = reported;
+  try {
+    root = await realpath(reported);
+  } catch {
+    // Keep the path reported by git.
+  }
+  let resolvedCwd = path.resolve(cwd);
+  try {
+    resolvedCwd = await realpath(resolvedCwd);
+  } catch {
+    // Keep the lexical cwd.
+  }
+  const relative = path.relative(root, resolvedCwd);
   if (relative.startsWith("..") || path.isAbsolute(relative)) return undefined;
   const head = await runGit(root, ["rev-parse", "HEAD"]);
   if (head.code !== 0) return undefined;

@@ -325,7 +325,13 @@ test("worktree isolation reviews and merges a teammate branch after tests pass",
   });
 
   const member = (await manager.snapshot())?.members.find((entry) => entry.name === "impl");
-  assert.ok(member?.worktreePath);
+  const notice = h.events.find(
+    (event) => event.type === "notice" && event.text.includes("shared tree"),
+  );
+  assert.ok(
+    member?.worktreePath,
+    notice ? notice.text : "worktree was not created",
+  );
   assert.equal(member?.isolation, "worktree");
   assert.match(member?.branch ?? "", /^team\//);
   assert.ok(existsSync(member!.worktreePath!));

@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
-import { readFile, realpath, stat } from "node:fs/promises";
+import { mkdtemp, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import { imageMimeTypeForPath } from "./images.ts";
 import type { FileAttachment } from "./types.ts";
@@ -90,43 +91,55 @@ async function extractPdfText(
     );
   }
 
-  const text = await new Promise<string>((resolve, reject) => {
-    const child = spawn("pdftotext", ["-layout", "-", "-"], {
-      stdio: ["pipe", "pipe", "pipe"],
+  // Use files rather than "-" for stdin/stdout: poppler accepts "-", while
+  // xpdf's pdftotext (shipped on some Windows runners) does not.
+  const directory = await mkdtemp(path.join(tmpdir(), "ollama-agent-pdf-"));
+  const input = path.join(directory, "input.pdf");
+  const output = path.join(directory, "output.txt");
+  await writeFile(input, buffer);
+  try {
+    const text = await new Promise<string>((resolve, reject) => {
+      const child = spawn("pdftotext", ["-layout", input, output], {
+        stdio: ["ignore", "ignore", "pipe"],
+      });
+      let errors = "";
+      child.stderr.setEncoding("utf8");
+      child.stderr.on("data", (chunk: string) => {
+        errors += chunk;
+      });
+      child.on("error", (error) => {
+        reject(
+          new Error(
+            `PDF extraction requires pdftotext (${error.message}). Install poppler-utils.`,
+          ),
+        );
+      });
+      child.on("close", async (code) => {
+        if (code !== 0) {
+          reject(new Error(`pdftotext failed: ${errors.slice(0, 200)}`));
+          return;
+        }
+        try {
+          const content = await readFile(output, "utf8");
+          resolve(
+            content.length > MAX_EXTRACTED_TEXT
+              ? content.slice(0, MAX_EXTRACTED_TEXT)
+              : content,
+          );
+        } catch {
+          reject(new Error("pdftotext produced no output file."));
+        }
+      });
     });
-    let output = "";
-    let errors = "";
-    child.stdout.setEncoding("utf8");
-    child.stdout.on("data", (chunk: string) => {
-      output += chunk;
-      if (output.length > MAX_EXTRACTED_TEXT) {
-        output = output.slice(0, MAX_EXTRACTED_TEXT);
-        child.kill("SIGKILL");
-      }
-    });
-    child.stderr.setEncoding("utf8");
-    child.stderr.on("data", (chunk: string) => {
-      errors += chunk;
-    });
-    child.on("error", (error) => {
-      reject(
-        new Error(
-          `PDF extraction requires pdftotext (${error.message}). Install poppler-utils.`,
-        ),
-      );
-    });
-    child.on("close", (code) => {
-      if (code === 0) resolve(output);
-      else reject(new Error(`pdftotext failed: ${errors.slice(0, 200)}`));
-    });
-    child.stdin.end(buffer);
-  });
 
-  const content = text.trim();
-  if (!content) {
-    throw new Error("No text could be extracted from this PDF.");
+      const content = text.trim();
+    if (!content) {
+      throw new Error("No text could be extracted from this PDF.");
+    }
+    return { content, size: buffer.length };
+  } finally {
+    await rm(directory, { recursive: true, force: true });
   }
-  return { content, size: buffer.length };
 }
 
 /** Validate a text or PDF attachment arriving from HTTP or IPC. */
