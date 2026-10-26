@@ -1,5 +1,6 @@
 import type {
   ContentBlock,
+  FileAttachment,
   ImageAttachment,
   Message,
   Provider,
@@ -125,10 +126,17 @@ export class Agent {
     return Math.max(4_000, Math.floor(window * 0.75));
   }
 
-  async run(userText: string, images?: ImageAttachment[]): Promise<void> {
+  async run(
+    userText: string,
+    images?: ImageAttachment[],
+    files?: FileAttachment[],
+  ): Promise<void> {
     const content: ContentBlock[] = [{ type: "text", text: userText }];
     for (const image of images ?? []) {
       content.push({ type: "image", ...image });
+    }
+    for (const file of files ?? []) {
+      content.push({ type: "file", ...file });
     }
     const userMessage: Message = { role: "user", content };
     this.messages.push(userMessage);

@@ -6,7 +6,7 @@ import process from "node:process";
 import { fileURLToPath } from "node:url";
 import { Agent, type AgentEvent } from "./core/agent.ts";
 import { MAX_IMAGES, validateImageAttachment } from "./core/images.ts";
-import type { ImageAttachment } from "./core/types.ts";
+import type { FileAttachment, ImageAttachment } from "./core/types.ts";
 import { OllamaProvider } from "./core/ollama.ts";
 import {
   PERMISSION_MODES,
@@ -23,6 +23,10 @@ import {
 } from "./core/sessions.ts";
 import { loadSettings, updateSettings, type AppSettings } from "./core/settings.ts";
 import { readProjectFile } from "./core/files.ts";
+import {
+  MAX_ATTACHMENTS,
+  validateFileAttachment,
+} from "./core/files.ts";
 import {
   assertDirectory,
   buildSystemPrompt,
@@ -728,6 +732,25 @@ async function main(): Promise<void> {
           return;
         }
 
+        const rawFiles = Array.isArray(body.files) ? body.files : [];
+        if (rawFiles.length > MAX_ATTACHMENTS) {
+          json(response, 400, {
+            error: `At most ${MAX_ATTACHMENTS} files per message.`,
+          });
+          return;
+        }
+        let files: FileAttachment[];
+        try {
+          files = await Promise.all(
+            rawFiles.map((value) => validateFileAttachment(value)),
+          );
+        } catch (error) {
+          json(response, 400, {
+            error: error instanceof Error ? error.message : String(error),
+          });
+          return;
+        }
+
         busy = true;
         response.writeHead(200, {
           "content-type": "text/event-stream; charset=utf-8",
@@ -747,7 +770,11 @@ async function main(): Promise<void> {
 
         send("start", { model: agent.model, mode: permissions.mode });
         try {
-          await agent.run(message, images.length > 0 ? images : undefined);
+          await agent.run(
+            message,
+            images.length > 0 ? images : undefined,
+            files.length > 0 ? files : undefined,
+          );
         } catch (error) {
           send("error", {
             message: error instanceof Error ? error.message : String(error),

@@ -132,6 +132,38 @@ test("server exposes state, chat streaming, sessions, projects, and file preview
     assert.ok(sessions.sessions.length >= 1);
     assert.equal(sessions.sessions[0].title, "hi");
 
+    const fileChat = await fetch(`${base}/api/chat`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        message: "review this file",
+        files: [
+          { name: "notes.txt", mimeType: "text/plain", content: "file body" },
+        ],
+      }),
+    });
+    assert.match(await fileChat.text(), /event: done/);
+
+    const withFiles = (await (await fetch(`${base}/api/sessions`)).json()) as {
+      current: string;
+    };
+    const loaded = (await (
+      await fetch(`${base}/api/sessions/load`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ id: withFiles.current }),
+      })
+    ).json()) as {
+      messages: Array<{
+        content: Array<{ type: string; name?: string; content?: string }>;
+      }>;
+    };
+    const fileBlock = loaded.messages
+      .flatMap((message) => message.content)
+      .find((block) => block.type === "file");
+    assert.equal(fileBlock?.name, "notes.txt");
+    assert.equal(fileBlock?.content, "file body");
+
     const switched = (await (
       await fetch(`${base}/api/project/set`, {
         method: "POST",

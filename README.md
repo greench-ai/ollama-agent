@@ -47,6 +47,8 @@ node dist/cli.mjs --model qwen3:8b
 /think [on|off]            toggle reasoning stream
 /image <path>              attach an image to the next message
 /images                    list staged images
+/file <path>               attach a text/code/PDF file
+/files                     list staged files       /files clear
 /mcp [reconnect <server>]  /mcp logout <server>
 /resources                 list MCP resources
 /resource <server> <uri>   read an MCP resource
@@ -66,28 +68,29 @@ node dist/cli.mjs --model qwen3:8b
 | `plan` | read-only only; mutating tools are denied |
 | `bypassPermissions` | everything runs |
 
-## Images
+## Attachments
 
-Images can enter a conversation three ways:
+User attachments come in three kinds:
 
-- **User attachments** — `/image <path>` in the CLI stages images for the next
-  message; the web UI has an Attach button and accepts pasted images; HTTP and
-  IPC clients send an `images` array.
-- **Read tool** — reading a `.png`, `.jpg`, `.jpeg`, `.webp`, `.gif`, or `.bmp`
-  returns the image as an attachment instead of a text description.
-- **MCP tools** — image blocks in MCP tool results are forwarded.
+- **Images** — `/image <path>` in the CLI, the Attach button or paste/drag in the
+  UI, or an `images` array over HTTP/IPC. 10 MB per image, 8 per message.
+  Requires a vision-capable model (`ollama show <model>` lists `vision`).
+- **Text and code** — `/file <path>` in the CLI, or pick/drag any text, code, or
+  config file in the UI. 1 MB per file, 8 per message. The content is embedded
+  in the model context as a labelled block; the message shows a file chip.
+- **PDFs** — attach a `.pdf` the same way. Text is extracted with `pdftotext`
+  (install `poppler-utils`); 10 MB per PDF. Image-only PDFs yield no text
+  without OCR.
 
-Ollama attaches images to user messages, so tool-result images are replayed as a
-follow-up user message (`Images returned by tool results: …`) after the tool
-messages. Limits: 10 MB per image, 8 images per message. The model must be
-vision-capable (`ollama show <model>` lists `vision` in capabilities) — for
-example `d1-3b`, `qwen2.5vl:7b`, or a cloud vision model.
+The **Read tool** still returns images for image files. Ollama attaches images
+to user messages, so tool-result images are replayed as a follow-up user message
+(`Images returned by tool results: …`). Text and PDF attachments are provider
+agnostic and work with any model.
 
 ```bash
-node src/index.ts --model d1-3b:latest
-› /image screenshot.png
-image attached: screenshot.png (image/png, ~240 KB) · 1 staged
-› What is wrong with this UI?
+› /file src/app.ts
+file attached: app.ts (text, 12 KB) · 1 staged
+› What does this module do?
 ```
 
 ## Plan mode
@@ -417,7 +420,8 @@ Claude-Desktop-style shell (sidebar, searchable history, rename/delete/resume,
 markdown rendering, stop button, themes), settings and connector management,
 project switching with project instructions, an artifact panel, an update
 checker, 8 built-in tools (including `Task` subagents with isolated context),
-image input (user attachments, Read on images, MCP image results), an MCP client
+image input (user image, text/code, and PDF attachments; Read on images, MCP
+image results), an MCP client
 (stdio + Streamable HTTP; tools, resources, prompts, pagination, annotations,
 reconnect, OAuth authorization-code + PKCE with discovery and dynamic client
 registration), a local HTTP/SSE server with the same web client, an Electron

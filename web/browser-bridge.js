@@ -76,11 +76,11 @@
       return response.json();
     },
 
-    async chat(message, images, onEvent) {
+    async chat(message, images, files, onEvent) {
       const response = await fetch("/api/chat", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ message, images: images ?? [] }),
+        body: JSON.stringify({ message, images: images ?? [], files: files ?? [] }),
       });
       if (!response.ok) {
         const data = await response.json().catch(() => ({}));

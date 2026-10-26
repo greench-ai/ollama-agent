@@ -3,7 +3,8 @@ import process from "node:process";
 import path from "node:path";
 import { Agent } from "./core/agent.ts";
 import { MAX_IMAGE_BYTES, loadImageAttachment } from "./core/images.ts";
-import type { ImageAttachment } from "./core/types.ts";
+import { MAX_ATTACHMENTS, readFileAttachment } from "./core/files.ts";
+import type { FileAttachment, ImageAttachment } from "./core/types.ts";
 import { OllamaProvider } from "./core/ollama.ts";
 import {
   PERMISSION_MODES,
@@ -143,6 +144,7 @@ Options
 Slash commands
   /help  /models  /model <name>  /mode <mode>  /think [on|off]
   /image <path>  /images   (attach images to the next message)
+  /file <path>   /files    (attach text/code/PDF files to the next message)
   /mcp [reconnect <server>]  /mcp logout <server>
   /resources  /resource <server> <uri>
   /prompts  /prompt <server> <name> [key=value ...]
@@ -381,15 +383,17 @@ async function main(): Promise<void> {
   });
 
   let stagedImages: ImageAttachment[] = [];
+  let stagedFiles: FileAttachment[] = [];
 
   const runTurn = async (
     text: string,
     images?: ImageAttachment[],
+    files?: FileAttachment[],
   ): Promise<void> => {
     currentController = new AbortController();
     agent.signal = currentController.signal;
     try {
-      await agent.run(text, images);
+      await agent.run(text, images, files);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       if (!/abort/i.test(message)) console.error(style.red(message));
@@ -630,9 +634,52 @@ async function main(): Promise<void> {
           }
           break;
         }
+        case "file": {
+          const target = rest.join(" ").trim();
+          if (!target) {
+            console.log(style.dim("usage: /file <path>"));
+            break;
+          }
+          try {
+            if (stagedFiles.length >= MAX_ATTACHMENTS) {
+              console.log(style.red(`at most ${MAX_ATTACHMENTS} files per message`));
+              break;
+            }
+            const attachment = await readFileAttachment(path.resolve(cwd, target));
+            stagedFiles.push(attachment);
+            const bytes = attachment.size ?? 0;
+            const sizeLabel =
+              bytes < 1024 ? `${bytes} B` : `${Math.round(bytes / 1024)} KB`;
+            console.log(
+              style.dim(
+                `file attached: ${attachment.name} (${attachment.kind}, ${sizeLabel}) · ` +
+                  `${stagedFiles.length} staged`,
+              ),
+            );
+          } catch (error) {
+            console.log(style.red(error instanceof Error ? error.message : String(error)));
+          }
+          break;
+        }
+        case "files": {
+          if (rest[0] === "clear") {
+            stagedFiles = [];
+            console.log(style.dim("staged files cleared"));
+            break;
+          }
+          if (stagedFiles.length === 0) {
+            console.log(style.dim("no staged files"));
+            break;
+          }
+          for (const file of stagedFiles) {
+            console.log(style.dim(`${file.name}  ${file.kind}  ${file.mimeType}`));
+          }
+          break;
+        }
         case "clear":
           agent.reset();
           stagedImages = [];
+          stagedFiles = [];
           console.log(style.dim("conversation cleared"));
           break;
         case "session":
@@ -649,8 +696,14 @@ async function main(): Promise<void> {
     }
 
     const turnImages = stagedImages;
+    const turnFiles = stagedFiles;
     stagedImages = [];
-    await runTurn(input, turnImages.length > 0 ? turnImages : undefined);
+    stagedFiles = [];
+    await runTurn(
+      input,
+      turnImages.length > 0 ? turnImages : undefined,
+      turnFiles.length > 0 ? turnFiles : undefined,
+    );
   }
   } finally {
     rl.close();

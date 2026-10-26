@@ -75,10 +75,19 @@ export function toOllamaMessages(
         }
         continue;
       }
-      const text = message.content
+      const userText = message.content
         .filter((b) => b.type === "text")
         .map((b) => (b.type === "text" ? b.text : ""))
         .join("\n");
+      const fileText = message.content
+        .map((block) =>
+          block.type === "file"
+            ? `--- Attached file: ${block.name} (${block.mimeType}) ---\n${block.content}\n--- End of ${block.name} ---`
+            : "",
+        )
+        .filter(Boolean)
+        .join("\n\n");
+      const text = [userText, fileText].filter(Boolean).join("\n\n");
       const images = message.content
         .filter((b) => b.type === "image")
         .map((b) => (b.type === "image" ? b.data : ""));

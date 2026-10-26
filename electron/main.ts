@@ -7,7 +7,7 @@ import path from "node:path";
 import process from "node:process";
 import { Agent, type AgentEvent } from "../src/core/agent.ts";
 import { MAX_IMAGES, validateImageAttachment } from "../src/core/images.ts";
-import type { ImageAttachment } from "../src/core/types.ts";
+import type { FileAttachment, ImageAttachment } from "../src/core/types.ts";
 import { OllamaProvider } from "../src/core/ollama.ts";
 import {
   PERMISSION_MODES,
@@ -24,6 +24,11 @@ import {
 } from "../src/core/sessions.ts";
 import { loadSettings, updateSettings, type AppSettings } from "../src/core/settings.ts";
 import { readProjectFile } from "../src/core/files.ts";
+import {
+  MAX_ATTACHMENTS,
+  attachmentMimeTypeForPath,
+  validateFileAttachment,
+} from "../src/core/files.ts";
 import {
   assertDirectory,
   buildSystemPrompt,
@@ -448,6 +453,19 @@ function registerIpc(): void {
       );
     }
 
+    const rawFiles = Array.isArray(body.files) ? body.files : [];
+    if (rawFiles.length > MAX_ATTACHMENTS) {
+      throw new Error(`At most ${MAX_ATTACHMENTS} files per message.`);
+    }
+    let files: FileAttachment[];
+    try {
+      files = await Promise.all(rawFiles.map((value) => validateFileAttachment(value)));
+    } catch (error) {
+      throw new Error(
+        `Invalid attachment: ${error instanceof Error ? error.message : error}`,
+      );
+    }
+
     busy = true;
     const controller = new AbortController();
     agent.signal = controller.signal;
@@ -455,7 +473,11 @@ function registerIpc(): void {
     let finalContext: { used: number; budget: number } | undefined;
     sendEvent("start", { model: agent.model, mode: permissions.mode });
     try {
-      await agent.run(message, images.length > 0 ? images : undefined);
+      await agent.run(
+        message,
+        images.length > 0 ? images : undefined,
+        files.length > 0 ? files : undefined,
+      );
     } finally {
       currentRun = null;
       agent.signal = undefined;
@@ -835,6 +857,22 @@ async function createWindow(): Promise<void> {
           `Promise.all([window.agentBridge.getState(), window.agentBridge.listSessions()]).then(([s, l]) => JSON.stringify({ model: s.model, mode: s.mode, mcp: s.mcp.length, sessions: l.sessions.length, appLoaded: Boolean(window.__agentAppLoaded) }))`,
         );
         console.log("[electron] ipc state:", stateInfo);
+        if (process.env.AGENT_SMOKE_DROP_FILE) {
+          const filePath = process.env.AGENT_SMOKE_DROP_FILE;
+          const buffer = await readFile(filePath);
+          const name = path.basename(filePath);
+          const mime = attachmentMimeTypeForPath(filePath);
+          await mainWindow?.webContents.executeJavaScript(`
+            (() => {
+              const bytes = Uint8Array.from(atob(${JSON.stringify(buffer.toString("base64"))}), (c) => c.charCodeAt(0));
+              const file = new File([bytes], ${JSON.stringify(name)}, { type: ${JSON.stringify(mime)} });
+              const transfer = new DataTransfer();
+              transfer.items.add(file);
+              window.dispatchEvent(new DragEvent("drop", { dataTransfer: transfer, bubbles: true, cancelable: true }));
+            })()
+          `);
+          await new Promise((resolve) => setTimeout(resolve, 800));
+        }
         if (process.env.AGENT_SMOKE_APPROVAL) {
           const prompt =
             process.env.AGENT_SMOKE_PROMPT ||

@@ -53,6 +53,30 @@ test("images attach to user messages and follow tool results", () => {
   assert.match(String(follow?.content), /chart\.png/);
 });
 
+test("file attachments are embedded into the user text", () => {
+  const messages: Message[] = [
+    {
+      role: "user",
+      content: [
+        { type: "text", text: "review this" },
+        {
+          type: "file",
+          name: "app.ts",
+          mimeType: "text/typescript",
+          content: "export const answer = 42;",
+          kind: "text",
+          size: 25,
+        },
+      ],
+    },
+  ];
+  const mapped = toOllamaMessages(messages, "system");
+  const user = mapped.find((entry) => entry.role === "user");
+  assert.match(String(user?.content), /review this/);
+  assert.match(String(user?.content), /Attached file: app\.ts/);
+  assert.match(String(user?.content), /export const answer = 42/);
+});
+
 test("conversation maps to Ollama chat messages", () => {
   const messages: Message[] = [
     { role: "user", content: [{ type: "text", text: "list files" }] },

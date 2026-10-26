@@ -111,6 +111,7 @@
     model: "",
     mode: "default",
     stagedImages: [],
+    stagedFiles: [],
     theme: "system",
     settings: { theme: "system", showThinking: true, model: "", mode: "default" },
     cwd: "",
@@ -355,7 +356,7 @@
     wrap.appendChild(actions);
   }
 
-  function addUserMessage(text, images, scroll = true) {
+  function addUserMessage(text, images, files, scroll = true) {
     const wrap = el("div", "msg user");
     const bubble = el("div", "bubble");
     if (images && images.length > 0) {
@@ -368,8 +369,21 @@
       }
       bubble.appendChild(thumbs);
     }
-    if (text) bubble.appendChild(document.createTextNode(text));
-    else if (images && images.length > 0) {
+    if (files && files.length > 0) {
+      const list = el("div", "file-chips");
+      for (const file of files) {
+        const chip = el("div", "file-chip");
+        chip.appendChild(el("span", "file-name", file.name || "file"));
+        if (file.size) {
+          chip.appendChild(el("span", "file-size", formatSize(file.size)));
+        }
+        list.appendChild(chip);
+      }
+      bubble.appendChild(list);
+    }
+    if (text) {
+      bubble.appendChild(document.createTextNode(text));
+    } else if (images && images.length > 0 && (!files || files.length === 0)) {
       bubble.appendChild(document.createTextNode("(image)"));
     }
     wrap.appendChild(bubble);
@@ -570,7 +584,17 @@
             dataUrl: `data:${image.mimeType};base64,${image.data}`,
             name: image.name,
           }));
-        if (text || images.length > 0) addUserMessage(text, images, false);
+        const files = blocks
+          .filter((block) => block.type === "file")
+          .map((file) => ({
+            name: file.name,
+            size: file.size,
+            kind: file.kind,
+            mimeType: file.mimeType,
+          }));
+        if (text || images.length > 0 || files.length > 0) {
+          addUserMessage(text, images, files, false);
+        }
         continue;
       }
       if (message.role !== "assistant") continue;
@@ -746,30 +770,111 @@
   /* ---------- attachments ---------- */
 
   const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
+  const MAX_FILE_BYTES = 1_000_000;
+  const MAX_PDF_BYTES = 10 * 1024 * 1024;
+  const MAX_ATTACHMENTS = 8;
+  const TEXT_EXTENSIONS = new Set([
+    "txt", "md", "markdown", "json", "jsonc", "yaml", "yml", "toml", "ini",
+    "csv", "tsv", "log", "xml", "html", "htm", "css", "scss", "less", "js",
+    "mjs", "cjs", "jsx", "ts", "tsx", "py", "rb", "go", "rs", "java", "kt",
+    "c", "h", "cc", "cpp", "hpp", "cs", "php", "sh", "bash", "zsh", "fish",
+    "sql", "graphql", "gql", "env",
+  ]);
 
-  function readFileAsAttachment(file) {
+  function isPdfFile(file) {
+    return file.type === "application/pdf" || /\.pdf$/i.test(file.name);
+  }
+
+  function isTextFile(file) {
+    if (file.type.startsWith("text/")) return true;
+    if (
+      [
+        "application/json",
+        "application/xml",
+        "application/javascript",
+        "application/x-yaml",
+        "application/yaml",
+        "application/toml",
+      ].includes(file.type)
+    ) {
+      return true;
+    }
+    const match = /\.([A-Za-z0-9]+)$/.exec(file.name);
+    const extension = match ? match[1].toLowerCase() : "";
+    return (
+      TEXT_EXTENSIONS.has(extension) ||
+      ["dockerfile", "makefile", "readme", "license", "changelog"].includes(
+        file.name.toLowerCase(),
+      )
+    );
+  }
+
+  function readAsDataUrl(file) {
     return new Promise((resolve, reject) => {
-      if (!file.type.startsWith("image/")) {
-        reject(new Error("Only images are supported."));
-        return;
-      }
-      if (file.size > MAX_IMAGE_BYTES) {
-        reject(new Error(file.name + " is larger than 10 MB."));
-        return;
-      }
       const reader = new FileReader();
       reader.onerror = () => reject(new Error("Could not read " + file.name));
-      reader.onload = () => {
-        const dataUrl = String(reader.result);
-        const match = /^data:([^;]+);base64,(.*)$/s.exec(dataUrl);
-        if (!match) {
-          reject(new Error("Unsupported image encoding."));
-          return;
-        }
-        resolve({ data: match[2], mimeType: match[1], name: file.name, dataUrl });
-      };
+      reader.onload = () => resolve(String(reader.result));
       reader.readAsDataURL(file);
     });
+  }
+
+  async function readAttachment(file) {
+    if (file.type.startsWith("image/")) {
+      if (file.size > MAX_IMAGE_BYTES) {
+        throw new Error(file.name + " is larger than 10 MB.");
+      }
+      const dataUrl = await readAsDataUrl(file);
+      const match = /^data:([^;]+);base64,(.*)$/s.exec(dataUrl);
+      if (!match) throw new Error("Unsupported image encoding.");
+      return {
+        kind: "image",
+        data: match[2],
+        mimeType: match[1],
+        name: file.name,
+        dataUrl,
+      };
+    }
+
+    if (isPdfFile(file)) {
+      if (file.size > MAX_PDF_BYTES) {
+        throw new Error(file.name + " is larger than 10 MB.");
+      }
+      const dataUrl = await readAsDataUrl(file);
+      const match = /^data:([^;]+);base64,(.*)$/s.exec(dataUrl);
+      if (!match) throw new Error("Unsupported PDF encoding.");
+      return {
+        kind: "pdf",
+        data: match[2],
+        mimeType: "application/pdf",
+        name: file.name,
+        size: file.size,
+      };
+    }
+
+    if (isTextFile(file)) {
+      if (file.size > MAX_FILE_BYTES) {
+        throw new Error(file.name + " is larger than 1 MB.");
+      }
+      const content = await file.text();
+      return {
+        kind: "text",
+        content,
+        mimeType: file.type || "text/plain",
+        name: file.name,
+        size: file.size,
+      };
+    }
+
+    throw new Error(
+      `Unsupported file type: ${file.name}. Attach images, PDFs, or text/code files.`,
+    );
+  }
+
+  function formatSize(bytes) {
+    if (!bytes) return "";
+    if (bytes < 1024) return `${bytes} B`;
+    if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
+    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
   }
 
   function renderPreviews() {
@@ -789,16 +894,37 @@
       chip.append(img, remove);
       previews.appendChild(chip);
     });
+    state.stagedFiles.forEach((file, index) => {
+      const chip = el("div", "chip file-chip");
+      chip.appendChild(el("span", "file-name", file.name));
+      chip.appendChild(el("span", "file-size", formatSize(file.size)));
+      const remove = el("button", "", "×");
+      remove.type = "button";
+      remove.title = "Remove";
+      remove.addEventListener("click", () => {
+        state.stagedFiles.splice(index, 1);
+        renderPreviews();
+      });
+      chip.appendChild(remove);
+      previews.appendChild(chip);
+    });
   }
 
   async function addFiles(files) {
     for (const file of files) {
-      if (state.stagedImages.length >= 8) {
-        addError("At most 8 images per message.");
+      const image = file.type.startsWith("image/");
+      if (image && state.stagedImages.length >= MAX_ATTACHMENTS) {
+        addError(`At most ${MAX_ATTACHMENTS} images per message.`);
+        break;
+      }
+      if (!image && state.stagedFiles.length >= MAX_ATTACHMENTS) {
+        addError(`At most ${MAX_ATTACHMENTS} files per message.`);
         break;
       }
       try {
-        state.stagedImages.push(await readFileAsAttachment(file));
+        const attachment = await readAttachment(file);
+        if (attachment.kind === "image") state.stagedImages.push(attachment);
+        else state.stagedFiles.push(attachment);
       } catch (error) {
         addError(error instanceof Error ? error.message : String(error));
       }
@@ -813,8 +939,7 @@
     if (files.length > 0) void addFiles(files);
   });
   input.addEventListener("paste", (event) => {
-    const files = Array.from((event.clipboardData && event.clipboardData.files) || [])
-      .filter((file) => file.type.startsWith("image/"));
+    const files = Array.from((event.clipboardData && event.clipboardData.files) || []);
     if (files.length > 0) {
       event.preventDefault();
       void addFiles(files);
@@ -857,9 +982,7 @@
     dragDepth = 0;
     dropOverlay.hidden = true;
     const files = Array.from((event.dataTransfer && event.dataTransfer.files) || []);
-    const images = files.filter((file) => file.type.startsWith("image/"));
-    if (images.length > 0) void addFiles(images);
-    else if (files.length > 0) addError("Only images can be attached.");
+    if (files.length > 0) void addFiles(files);
   });
 
   /* ---------- sessions ---------- */
@@ -1034,6 +1157,9 @@
       thread.innerHTML = "";
       clearArtifacts();
       clearContext();
+      state.stagedImages = [];
+      state.stagedFiles = [];
+      renderPreviews();
       setHasChat(false);
       await refreshSessions();
       input.focus();
@@ -1105,22 +1231,25 @@
     }
   });
 
-  async function runTurn(text) {
+  async function runTurn(text, images = [], files = []) {
     if (state.running) return;
-    if (!text && state.stagedImages.length === 0) return;
-
-    const images = state.stagedImages.slice();
-    state.stagedImages = [];
-    renderPreviews();
+    if (!text && images.length === 0 && files.length === 0) return;
 
     setRunning(true);
-    addUserMessage(text, images);
+    addUserMessage(text, images, files);
     startAssistant();
 
     try {
       const result = await bridge.chat(
         text,
         images.map(({ data, mimeType, name }) => ({ data, mimeType, name })),
+        files.map(({ name, mimeType, content, data, size }) => ({
+          name,
+          mimeType,
+          content,
+          data,
+          size,
+        })),
         handleEvent,
       );
       const context =
@@ -1150,10 +1279,21 @@
   composer.addEventListener("submit", (event) => {
     event.preventDefault();
     const text = input.value.trim();
-    if (!text && state.stagedImages.length === 0) return;
+    if (
+      !text &&
+      state.stagedImages.length === 0 &&
+      state.stagedFiles.length === 0
+    ) {
+      return;
+    }
+    const images = state.stagedImages.slice();
+    const files = state.stagedFiles.slice();
+    state.stagedImages = [];
+    state.stagedFiles = [];
+    renderPreviews();
     input.value = "";
     autoGrow();
-    void runTurn(text);
+    void runTurn(text, images, files);
   });
 
   input.addEventListener("keydown", (event) => {
@@ -1269,6 +1409,9 @@
       thread.innerHTML = "";
       clearArtifacts();
       clearContext();
+      state.stagedImages = [];
+      state.stagedFiles = [];
+      renderPreviews();
       setHasChat(false);
       await refreshSessions();
       input.focus();

@@ -29,6 +29,19 @@ export interface ImageBlock extends ImageAttachment {
   type: "image";
 }
 
+export interface FileAttachment {
+  name: string;
+  mimeType: string;
+  /** Extracted/decoded text content. */
+  content: string;
+  kind: "text" | "pdf";
+  size?: number;
+}
+
+export interface FileBlock extends FileAttachment {
+  type: "file";
+}
+
 export interface ToolUseBlock {
   type: "tool_use";
   id: string;
@@ -51,6 +64,7 @@ export type ContentBlock =
   | TextBlock
   | ThinkingBlock
   | ImageBlock
+  | FileBlock
   | ToolUseBlock
   | ToolResultBlock;
 
@@ -106,6 +120,8 @@ export interface ToolResult {
   isError?: boolean;
   /** Images the model should see alongside the text result. */
   images?: ImageAttachment[];
+  /** Text documents the model should see alongside the text result. */
+  files?: FileAttachment[];
 }
 
 export interface Tool {
