@@ -8,6 +8,9 @@ const context: Record<string, unknown> = {};
 context.globalThis = context;
 vm.runInNewContext(source, context);
 const renderMarkdown = context.renderMarkdown as (text: string) => string;
+const renderMarkdownBlocks = context.renderMarkdownBlocks as (
+  text: string,
+) => Array<{ source: string; html: string }>;
 
 test("markdown escapes raw HTML", () => {
   const html = renderMarkdown('<script>alert("x")</script>');
@@ -28,6 +31,18 @@ test("fenced code stays literal", () => {
   assert.match(html, /<pre><code class="language-js">/);
   assert.match(html, /&lt;b&gt;/);
   assert.ok(!html.includes("<b>"));
+});
+
+test("block renderer splits top-level blocks for incremental updates", () => {
+  const blocks = renderMarkdownBlocks(
+    "# Title\n\nparagraph text\n\n```js\nconst x = 1;\n```\n\n- one\n- two",
+  );
+  assert.equal(blocks.length, 4);
+  assert.match(blocks[0].html, /<h1>Title<\/h1>/);
+  assert.match(blocks[1].html, /<p>paragraph text<\/p>/);
+  assert.match(blocks[2].html, /language-js/);
+  assert.match(blocks[3].html, /<ul>/);
+  assert.match(blocks[2].source, /const x = 1/);
 });
 
 test("links are limited to http(s)", () => {

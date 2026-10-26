@@ -24,6 +24,13 @@
         --green: #8fb573;
         --radius: 12px;
         --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        --syn-comment: #7f848e;
+        --syn-keyword: #c792ea;
+        --syn-string: #9ece6a;
+        --syn-number: #f78c6c;
+        --syn-function: #82aaff;
+        --syn-operator: #89ddff;
+        --syn-punctuation: #a6a39b;
       }
       :root[data-theme="light"] {
         --bg: #faf9f5;
@@ -38,6 +45,13 @@
         --accent-ink: #fffdf8;
         --red: #b5432f;
         --green: #4f7a3a;
+        --syn-comment: #8a8377;
+        --syn-keyword: #9a3d8f;
+        --syn-string: #3d7a3d;
+        --syn-number: #a8542f;
+        --syn-function: #2f5fa8;
+        --syn-operator: #2f6f8f;
+        --syn-punctuation: #6f6b62;
       }
       @media (prefers-color-scheme: light) {
         :root[data-theme="system"] {
@@ -53,6 +67,13 @@
           --accent-ink: #fffdf8;
           --red: #b5432f;
           --green: #4f7a3a;
+          --syn-comment: #8a8377;
+          --syn-keyword: #9a3d8f;
+          --syn-string: #3d7a3d;
+          --syn-number: #a8542f;
+          --syn-function: #2f5fa8;
+          --syn-operator: #2f6f8f;
+          --syn-punctuation: #6f6b62;
         }
       }
 
@@ -448,6 +469,61 @@
       }
       .md pre:hover .copy { opacity: 1; }
       .md .copy:hover { color: var(--text); }
+      .md-block > :first-child { margin-top: 0; }
+      .md-block > :last-child { margin-bottom: 0; }
+      .md-block:not(:last-child) { margin-bottom: 12px; }
+
+      .md .token.comment,
+      .md .token.prolog,
+      .md .token.doctype,
+      .md .token.cdata { color: var(--syn-comment); }
+      .md .token.punctuation { color: var(--syn-punctuation); }
+      .md .token.property,
+      .md .token.tag,
+      .md .token.boolean,
+      .md .token.number,
+      .md .token.constant,
+      .md .token.symbol,
+      .md .token.deleted { color: var(--syn-number); }
+      .md .token.selector,
+      .md .token.attr-name,
+      .md .token.string,
+      .md .token.char,
+      .md .token.builtin,
+      .md .token.inserted { color: var(--syn-string); }
+      .md .token.operator,
+      .md .token.entity,
+      .md .token.url { color: var(--syn-operator); }
+      .md .token.atrule,
+      .md .token.attr-value,
+      .md .token.keyword { color: var(--syn-keyword); }
+      .md .token.function,
+      .md .token.class-name { color: var(--syn-function); }
+      .md .token.regex,
+      .md .token.important,
+      .md .token.variable { color: var(--syn-number); }
+
+      .msg-actions {
+        display: flex;
+        gap: 6px;
+        opacity: 0;
+        transition: opacity 0.12s;
+        margin-top: 2px;
+      }
+      .msg:hover .msg-actions { opacity: 1; }
+      .msg.user .msg-actions { justify-content: flex-end; }
+      .msg-actions button {
+        background: transparent;
+        border: 1px solid transparent;
+        color: var(--muted);
+        font-size: 12px;
+        padding: 2px 6px;
+        border-radius: 6px;
+      }
+      .msg-actions button:hover { color: var(--text); background: var(--surface); }
+      @media (hover: none) {
+        .msg-actions { opacity: 1; }
+      }
 
       .thinking { color: var(--muted); font-size: 13px; }
       .thinking summary { cursor: pointer; list-style: none; }
@@ -523,6 +599,18 @@
       .approval button.allow { color: var(--green); }
       .approval button.deny { color: var(--red); }
       .approval .done, .plan .done { color: var(--muted); font-size: 12.5px; }
+      .approval-preview {
+        max-height: 240px;
+        overflow: auto;
+        background: var(--bg-elevated);
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        padding: 8px 10px;
+        font: 12px/1.5 var(--mono);
+      }
+      .approval-preview .line { display: block; white-space: pre-wrap; word-break: break-word; }
+      .approval-preview .add { color: var(--green); }
+      .approval-preview .del { color: var(--red); }
       .plan .title { font-weight: 600; color: var(--accent); }
       .plan pre {
         margin: 0;
@@ -576,6 +664,8 @@
       }
       #input::placeholder { color: var(--muted); }
       .composer-actions { display: flex; align-items: center; gap: 8px; }
+      .context { font-size: 11.5px; color: var(--muted); white-space: nowrap; }
+      .context.warn { color: var(--accent); }
       .send {
         background: var(--accent);
         color: var(--accent-ink);
@@ -757,6 +847,47 @@
         .chat-title { max-width: 35%; }
         .topbar select { max-width: 120px; }
       }
+
+      .sr-only {
+        position: absolute;
+        width: 1px;
+        height: 1px;
+        padding: 0;
+        margin: -1px;
+        overflow: hidden;
+        clip: rect(0, 0, 0, 0);
+        white-space: nowrap;
+        border: 0;
+      }
+      .drop-overlay {
+        position: fixed;
+        inset: 0;
+        z-index: 80;
+        background: rgba(0, 0, 0, 0.45);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        pointer-events: none;
+      }
+      .drop-overlay[hidden] { display: none; }
+      .drop-box {
+        border: 2px dashed var(--accent);
+        border-radius: 16px;
+        padding: 26px 34px;
+        background: var(--bg-elevated);
+        color: var(--text);
+        font-weight: 600;
+      }
+      @media (prefers-reduced-motion: reduce) {
+        *,
+        *::before,
+        *::after {
+          transition-duration: 0.01ms !important;
+          animation-duration: 0.01ms !important;
+          animation-iteration-count: 1 !important;
+          scroll-behavior: auto !important;
+        }
+      }
     </style>
   </head>
   <body>
@@ -820,6 +951,7 @@
           <textarea id="input" rows="1" placeholder="How can I help you today?"></textarea>
           <div class="composer-actions">
             <button type="button" class="icon" id="attach" title="Attach images">Attach</button>
+            <div class="context" id="context"></div>
             <div class="spacer"></div>
             <button type="button" class="stop" id="stop" hidden>Stop</button>
             <button class="send" id="send" type="submit">Send</button>
@@ -1005,7 +1137,13 @@
       hidden
     />
 
+    <div class="sr-only" id="sr-status" aria-live="polite"></div>
+    <div class="drop-overlay" id="drop-overlay" hidden>
+      <div class="drop-box">Drop images to attach</div>
+    </div>
+
     <script src="./markdown.js"></script>
+    <script src="./prism.js"></script>
     <script src="./browser-bridge.js"></script>
     <script src="./app.js"></script>
   </body>

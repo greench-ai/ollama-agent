@@ -381,6 +381,7 @@ async function main(): Promise<void> {
     "/index.html": "index.html",
     "/app.js": "app.js",
     "/markdown.js": "markdown.js",
+    "/prism.js": "prism.js",
     "/browser-bridge.js": "browser-bridge.js",
   };
 

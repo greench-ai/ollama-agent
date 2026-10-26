@@ -73,6 +73,9 @@
   const artifactsClose = $("artifacts-close");
   const artifactsList = $("artifacts-list");
   const artifactsPreview = $("artifacts-preview");
+  const contextEl = $("context");
+  const srStatus = $("sr-status");
+  const dropOverlay = $("drop-overlay");
 
   if (!bridge) {
     thread.appendChild(
@@ -176,6 +179,38 @@
   }
 
   function enhance(container) {
+    const prism = window.Prism;
+    if (prism) {
+      const aliases = {
+        ts: "typescript",
+        js: "javascript",
+        sh: "bash",
+        shell: "bash",
+        yml: "yaml",
+        md: "markdown",
+        py: "python",
+        rs: "rust",
+      };
+      container.querySelectorAll("pre > code").forEach((code) => {
+        if (code.dataset.highlighted) return;
+        const languageClass = [...code.classList].find((name) =>
+          name.startsWith("language-"),
+        );
+        const language = languageClass
+          ? languageClass.slice("language-".length)
+          : "";
+        if (!language) return;
+        const resolved = aliases[language] || language;
+        if (!prism.languages[resolved]) return;
+        code.className = `language-${resolved}`;
+        try {
+          prism.highlightElement(code);
+        } catch {
+          // Highlighting is cosmetic; keep the plain code block.
+        }
+      });
+    }
+
     container.querySelectorAll("pre").forEach((pre) => {
       if (pre.querySelector(".copy")) return;
       const button = el("button", "copy", "Copy");
@@ -193,8 +228,48 @@
   }
 
   function renderMarkdownInto(node, text) {
-    node.innerHTML = md(text);
-    enhance(node);
+    node.innerHTML = "";
+    const blocks =
+      typeof window.renderMarkdownBlocks === "function"
+        ? window.renderMarkdownBlocks(text)
+        : [{ html: md(text) }];
+    for (const block of blocks) {
+      const wrapper = el("div", "md-block");
+      wrapper.innerHTML = block.html;
+      node.appendChild(wrapper);
+      enhance(wrapper);
+    }
+  }
+
+  function renderCurrentBlocks(target) {
+    const blocks =
+      typeof window.renderMarkdownBlocks === "function"
+        ? window.renderMarkdownBlocks(target.text)
+        : [{ html: md(target.text) }];
+    if (!target.blocks) target.blocks = [];
+    if (!target.htmls) target.htmls = [];
+    while (target.blocks.length > blocks.length) {
+      const node = target.blocks.pop();
+      if (node) node.remove();
+      target.htmls.pop();
+    }
+    blocks.forEach((block, index) => {
+      let node = target.blocks[index];
+      if (!node) {
+        node = el("div", "md-block");
+        node.innerHTML = block.html;
+        target.mdEl.appendChild(node);
+        target.blocks[index] = node;
+        target.htmls[index] = block.html;
+        enhance(node);
+        return;
+      }
+      if (target.htmls[index] !== block.html) {
+        node.innerHTML = block.html;
+        target.htmls[index] = block.html;
+        enhance(node);
+      }
+    });
   }
 
   function summarize(name, input) {
@@ -264,6 +339,22 @@
 
   /* ---------- messages ---------- */
 
+  function addMessageActions(wrap, getText) {
+    if (wrap.querySelector(".msg-actions")) return;
+    const actions = el("div", "msg-actions");
+    const copy = el("button", "", "Copy");
+    copy.type = "button";
+    copy.addEventListener("click", async () => {
+      const ok = await copyText(getText() || "");
+      copy.textContent = ok ? "Copied" : "Failed";
+      setTimeout(() => {
+        copy.textContent = "Copy";
+      }, 1200);
+    });
+    actions.appendChild(copy);
+    wrap.appendChild(actions);
+  }
+
   function addUserMessage(text, images, scroll = true) {
     const wrap = el("div", "msg user");
     const bubble = el("div", "bubble");
@@ -282,6 +373,7 @@
       bubble.appendChild(document.createTextNode("(image)"));
     }
     wrap.appendChild(bubble);
+    addMessageActions(wrap, () => text);
     thread.appendChild(wrap);
     if (scroll) {
       setHasChat(true);
@@ -322,12 +414,62 @@
     scrollIfNear();
   }
 
+  function approvalLines(tool, input) {
+    const lines = [];
+    if (!input || typeof input !== "object") return lines;
+    if (tool === "Bash" && typeof input.command === "string") {
+      lines.push(["", input.command]);
+    } else if (tool === "Write" && typeof input.content === "string") {
+      for (const line of input.content.split("\n").slice(0, 80)) {
+        lines.push(["add", line]);
+      }
+    } else if (tool === "Edit" && typeof input.old_string === "string") {
+      for (const line of input.old_string.split("\n")) lines.push(["del", line]);
+      for (const line of String(input.new_string ?? "").split("\n")) {
+        lines.push(["add", line]);
+      }
+    } else if (tool === "MultiEdit" && Array.isArray(input.edits)) {
+      for (const edit of input.edits.slice(0, 10)) {
+        for (const line of String(edit.old_string ?? "").split("\n")) {
+          lines.push(["del", line]);
+        }
+        for (const line of String(edit.new_string ?? "").split("\n")) {
+          lines.push(["add", line]);
+        }
+      }
+    }
+    return lines;
+  }
+
+  function buildApprovalPreview(tool, input) {
+    const lines = approvalLines(tool, input);
+    if (lines.length === 0) return null;
+    const preview = el("div", "approval-preview");
+    for (const [kind, line] of lines.slice(0, 140)) {
+      const prefix = kind === "add" ? "+ " : kind === "del" ? "- " : "";
+      preview.appendChild(
+        el(
+          "span",
+          `line ${kind}`.trim(),
+          prefix + (line.length > 300 ? `${line.slice(0, 300)}…` : line),
+        ),
+      );
+    }
+    if (lines.length > 140) {
+      preview.appendChild(el("span", "line", `… ${lines.length - 140} more lines`));
+    }
+    return preview;
+  }
+
   function addApproval(event) {
     const card = el("div", "approval");
     const text = el("div", "text");
     text.appendChild(el("strong", "", "Allow " + event.tool + "?"));
     if (event.summary) text.appendChild(el("span", "muted", event.summary));
     card.appendChild(text);
+
+    const preview = buildApprovalPreview(event.tool, event.input);
+    if (preview) card.appendChild(preview);
 
     const actions = el("div", "actions");
     const buttons = [];
@@ -405,6 +547,7 @@
   function renderHistory(messages) {
     thread.innerHTML = "";
     clearArtifacts();
+    clearContext();
     const results = new Map();
     for (const message of messages) {
       for (const block of message.content || []) {
@@ -470,7 +613,14 @@
         }
       }
       flush();
-      if (wrap.childElementCount > 0) thread.appendChild(wrap);
+      if (wrap.childElementCount > 0) {
+        const text = blocks
+          .filter((block) => block.type === "text")
+          .map((block) => block.text)
+          .join("\n");
+        addMessageActions(wrap, () => text);
+        thread.appendChild(wrap);
+      }
     }
 
     setHasChat(thread.childElementCount > 0);
@@ -492,6 +642,8 @@
       thinking: null,
       tool: null,
       scheduled: false,
+      blocks: [],
+      htmls: [],
     };
     return current;
   }
@@ -502,7 +654,7 @@
     requestAnimationFrame(() => {
       if (!current) return;
       current.scheduled = false;
-      renderMarkdownInto(current.mdEl, current.text);
+      renderCurrentBlocks(current);
       scrollIfNear();
     });
   }
@@ -561,9 +713,11 @@
         renderUpdater(data);
         break;
       case "approval":
+        announce(`Approval needed for ${data.tool}.`);
         addApproval(data);
         break;
       case "plan_approval":
+        announce("Plan approval needed.");
         addPlanApproval(data);
         break;
       case "subagent_start":
@@ -573,10 +727,17 @@
         addNotice(`subagent ${data.name} ${data.ok ? "finished" : "failed"}`);
         break;
       case "error":
-        if (!/abort/i.test(String(data.message || ""))) addError(data.message);
+        if (!/abort/i.test(String(data.message || ""))) {
+          addError(data.message);
+          announce(`Error: ${data.message}`);
+        }
+        break;
+      case "done":
+        if (data && typeof data.used === "number") {
+          setContext(data.used, data.budget);
+        }
         break;
       case "step":
-      case "done":
       case "usage":
         break;
     }
@@ -658,6 +819,47 @@
       event.preventDefault();
       void addFiles(files);
     }
+  });
+
+  let dragDepth = 0;
+
+  function hasFiles(event) {
+    try {
+      return Array.from((event.dataTransfer && event.dataTransfer.types) || []).includes(
+        "Files",
+      );
+    } catch {
+      return false;
+    }
+  }
+
+  window.addEventListener("dragenter", (event) => {
+    if (!hasFiles(event)) return;
+    event.preventDefault();
+    dragDepth += 1;
+    dropOverlay.hidden = false;
+  });
+  window.addEventListener("dragover", (event) => {
+    if (hasFiles(event)) event.preventDefault();
+  });
+  window.addEventListener("dragleave", () => {
+    if (dropOverlay.hidden) return;
+    dragDepth = Math.max(0, dragDepth - 1);
+    if (dragDepth === 0) dropOverlay.hidden = true;
+  });
+  window.addEventListener("dragend", () => {
+    dragDepth = 0;
+    dropOverlay.hidden = true;
+  });
+  window.addEventListener("drop", (event) => {
+    if (!hasFiles(event)) return;
+    event.preventDefault();
+    dragDepth = 0;
+    dropOverlay.hidden = true;
+    const files = Array.from((event.dataTransfer && event.dataTransfer.files) || []);
+    const images = files.filter((file) => file.type.startsWith("image/"));
+    if (images.length > 0) void addFiles(images);
+    else if (files.length > 0) addError("Only images can be attached.");
   });
 
   /* ---------- sessions ---------- */
@@ -790,6 +992,7 @@
         titleEl.textContent = state.title;
         thread.innerHTML = "";
         clearArtifacts();
+        clearContext();
         setHasChat(false);
       }
       await refreshSessions();
@@ -830,6 +1033,7 @@
       titleEl.textContent = state.title;
       thread.innerHTML = "";
       clearArtifacts();
+      clearContext();
       setHasChat(false);
       await refreshSessions();
       input.focus();
@@ -861,6 +1065,36 @@
     stop.disabled = false;
   }
 
+  function setContext(used, budget) {
+    if (
+      typeof used !== "number" ||
+      typeof budget !== "number" ||
+      budget <= 0
+    ) {
+      clearContext();
+      return;
+    }
+    const format = (value) =>
+      value >= 1000 ? `${(value / 1000).toFixed(1)}k` : String(value);
+    contextEl.textContent = `ctx ${format(used)} / ${format(budget)}`;
+    contextEl.title = `${used} of ${budget} tokens used (estimated)`;
+    contextEl.classList.toggle("warn", used / budget > 0.85);
+  }
+
+  function clearContext() {
+    contextEl.textContent = "";
+    contextEl.title = "";
+    contextEl.classList.remove("warn");
+  }
+
+  function announce(text) {
+    if (!srStatus) return;
+    srStatus.textContent = "";
+    setTimeout(() => {
+      srStatus.textContent = text;
+    }, 40);
+  }
+
   stop.addEventListener("click", async () => {
     stop.disabled = true;
     addNotice("stopping…");
@@ -884,21 +1118,29 @@
     startAssistant();
 
     try {
-      await bridge.chat(
+      const result = await bridge.chat(
         text,
         images.map(({ data, mimeType, name }) => ({ data, mimeType, name })),
         handleEvent,
       );
+      const context =
+        result && (result.context || (typeof result.used === "number" ? result : undefined));
+      if (context && typeof context.used === "number") {
+        setContext(context.used, context.budget);
+      }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       if (!/abort/i.test(message)) addError(message);
     } finally {
       if (current) {
-        renderMarkdownInto(current.mdEl, current.text);
+        const finished = current;
+        renderCurrentBlocks(finished);
+        addMessageActions(finished.wrap, () => finished.text);
         scrollIfNear();
       }
       current = null;
       setRunning(false);
+      announce("Response complete.");
       window.__agentTurns = (window.__agentTurns || 0) + 1;
       void refreshSessions();
       input.focus();
@@ -1026,6 +1268,7 @@
       titleEl.textContent = state.title;
       thread.innerHTML = "";
       clearArtifacts();
+      clearContext();
       setHasChat(false);
       await refreshSessions();
       input.focus();
@@ -1265,17 +1508,34 @@
     void refreshUpdateStatus();
   }
 
+  let lastFocus = null;
+
+  function backgroundInert(value) {
+    const sidebar = $("sidebar");
+    const main = document.querySelector(".main");
+    if (sidebar) sidebar.inert = value;
+    if (main) main.inert = value;
+  }
+
   function openModal(tab) {
+    if (modal.hidden) lastFocus = document.activeElement;
     modal.hidden = false;
+    backgroundInert(true);
     resetConnectorForm();
     selectTab(tab || "general");
     void loadSettingsPanel();
     void refreshConnectors();
     fillAbout();
+    requestAnimationFrame(() => modalClose.focus());
   }
 
   function closeModal() {
     modal.hidden = true;
+    backgroundInert(false);
+    if (lastFocus && typeof lastFocus.focus === "function") {
+      lastFocus.focus();
+    }
+    lastFocus = null;
   }
 
   function populateSettingsModels(current) {
@@ -1608,7 +1868,47 @@
     if (event.target === modal) closeModal();
   });
   document.addEventListener("keydown", (event) => {
-    if (event.key === "Escape" && !modal.hidden) closeModal();
+    if (!modal.hidden) {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        closeModal();
+        return;
+      }
+      if (event.key === "Tab") {
+        const focusables = [
+          ...modal.querySelectorAll(
+            'button, input, select, textarea, a[href], [tabindex]:not([tabindex="-1"])',
+          ),
+        ].filter((node) => !node.disabled && node.offsetParent !== null);
+        if (focusables.length === 0) return;
+        const first = focusables[0];
+        const last = focusables[focusables.length - 1];
+        if (event.shiftKey && document.activeElement === first) {
+          event.preventDefault();
+          last.focus();
+        } else if (!event.shiftKey && document.activeElement === last) {
+          event.preventDefault();
+          first.focus();
+        }
+      }
+      return;
+    }
+
+    const mod = event.metaKey || event.ctrlKey;
+    if (!mod) return;
+    const key = event.key.toLowerCase();
+    if (key === "k") {
+      event.preventDefault();
+      if (document.body.classList.contains("sidebar-collapsed")) setCollapsed(false);
+      searchEl.focus();
+      searchEl.select();
+    } else if (key === "n") {
+      event.preventDefault();
+      void newChat();
+    } else if (event.key === ",") {
+      event.preventDefault();
+      openModal("general");
+    }
   });
   for (const tab of document.querySelectorAll(".tab")) {
     tab.addEventListener("click", () => selectTab(tab.dataset.tab));

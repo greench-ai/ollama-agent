@@ -452,16 +452,18 @@ function registerIpc(): void {
     const controller = new AbortController();
     agent.signal = controller.signal;
     currentRun = controller;
+    let finalContext: { used: number; budget: number } | undefined;
     sendEvent("start", { model: agent.model, mode: permissions.mode });
     try {
       await agent.run(message, images.length > 0 ? images : undefined);
     } finally {
       currentRun = null;
       agent.signal = undefined;
-      sendEvent("done", agent.contextUsage());
+      finalContext = agent.contextUsage();
+      sendEvent("done", finalContext);
       busy = false;
     }
-    return { ok: true };
+    return { ok: true, context: finalContext };
   });
 
   ipcMain.handle("agent:cancel", () => {
@@ -833,7 +835,19 @@ async function createWindow(): Promise<void> {
           `Promise.all([window.agentBridge.getState(), window.agentBridge.listSessions()]).then(([s, l]) => JSON.stringify({ model: s.model, mode: s.mode, mcp: s.mcp.length, sessions: l.sessions.length, appLoaded: Boolean(window.__agentAppLoaded) }))`,
         );
         console.log("[electron] ipc state:", stateInfo);
-        if (process.env.AGENT_SMOKE_CHAT) {
+        if (process.env.AGENT_SMOKE_APPROVAL) {
+          const prompt =
+            process.env.AGENT_SMOKE_PROMPT ||
+            "Use the Write tool to create /tmp/ui-demo/approval.txt containing \"please review\".";
+          await mainWindow?.webContents.executeJavaScript(`
+            const input = document.getElementById("input");
+            input.value = ${JSON.stringify(prompt)};
+            input.dispatchEvent(new Event("input", { bubbles: true }));
+            document.getElementById("composer").requestSubmit();
+          `);
+          await new Promise((resolve) => setTimeout(resolve, 8000));
+        }
+        if (process.env.AGENT_SMOKE_CHAT && !process.env.AGENT_SMOKE_APPROVAL) {
           const imagePath = process.env.AGENT_SMOKE_IMAGE;
           const prompt =
             process.env.AGENT_SMOKE_PROMPT ||

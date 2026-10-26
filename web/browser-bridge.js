@@ -89,6 +89,7 @@
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
       let buffer = "";
+      let lastDone = null;
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
@@ -111,9 +112,11 @@
           } catch {
             continue;
           }
+          if (event === "done") lastDone = data;
           onEvent(event, data);
         }
       }
+      return lastDone;
     },
   };
 })();

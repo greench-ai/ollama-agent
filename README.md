@@ -232,12 +232,24 @@ SSE events: `start`, `thinking`, `text`, `tool_start`, `tool_end`, `notice`,
 `subagent_start`, `subagent_end`, `session_title`, `error`, `approval`,
 `plan_approval`, `step`, `done` (with `used`/`budget`).
 
-The bundled client (`web/index.html`) is the desktop shell: collapsible sidebar
-with searchable chat history (rename/delete/resume), centered empty state,
-markdown with syntax-highlighted code and copy buttons, collapsible thinking,
-tool cards, attachment previews, approval cards, a stop button, and a
-system/light/dark theme toggle. Session switching and cancellation work in both
-Electron (IPC) and browser (HTTP) modes.
+The bundled client (`web/index.html`) is the desktop shell:
+
+- collapsible sidebar with searchable chat history (rename/delete/resume) and a
+  centered empty state
+- incrementally rendered markdown blocks with locally bundled Prism syntax
+  highlighting and copy buttons
+- collapsible thinking, tool cards, and approval cards that preview added and
+  removed lines (or the full Bash command) before you allow them
+- copy actions on messages and a live context/token HUD
+- drag-and-drop or paste image attachments, with previews
+- shortcuts: `Ctrl/Cmd+K` search chats, `Ctrl/Cmd+N` new chat, `Ctrl/Cmd+,`
+  settings
+- dialog focus trap, `aria-live` status announcements, and reduced-motion
+  support
+- system/light/dark theme
+
+Session switching and cancellation work in both Electron (IPC) and browser
+(HTTP) modes.
 
 ## Desktop shell (Electron)
 
@@ -378,6 +390,17 @@ available update downloads automatically, and **Restart to update** appears when
 it is ready. Development builds report that automatic updates require the
 packaged app.
 
+## Development
+
+```bash
+npm run typecheck   # tsc --noEmit
+npm test            # 47 tests, including a server integration test with a mock Ollama
+npm run build:web   # regenerate web/prism.js from web/highlight-src.js
+```
+
+CI (`.github/workflows/ci.yml`) runs typecheck, tests, and the Electron/web
+bundles on pushes to `main` and on pull requests.
+
 ## Design notes
 
 - The provider interface is deliberately Anthropic-shaped (content blocks,
@@ -402,4 +425,4 @@ shell with a sandboxed renderer, IPC approvals, plan-mode
 propose/approve/apply, CSP, window-state persistence, menus, Linux packaging
 (AppImage + deb), cross-platform CI packaging (Windows NSIS/zip, macOS dmg/zip
 x64 + arm64), and electron-updater wiring. Not yet: code
-signing/notarization and final UI polish.
+signing/notarization.

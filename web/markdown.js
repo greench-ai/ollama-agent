@@ -38,7 +38,91 @@
     return text;
   }
 
-  function render(text) {
+  function splitBlocks(text) {
+    const lines = String(text).replace(/\r\n/g, "\n").split("\n");
+    const blocks = [];
+    let index = 0;
+
+    function isHeading(line) {
+      return /^(#{1,6})\s+/.test(line);
+    }
+    function isRule(line) {
+      return /^\s*([-*_])\1{2,}\s*$/.test(line);
+    }
+    function isQuote(line) {
+      return /^>\s?/.test(line);
+    }
+    function isBullet(line) {
+      return /^\s*[-*+]\s+/.test(line);
+    }
+    function isNumbered(line) {
+      return /^\s*\d+[.)]\s+/.test(line);
+    }
+
+    while (index < lines.length) {
+      const line = lines[index];
+      if (!line.trim()) {
+        index += 1;
+        continue;
+      }
+
+      if (line.trim().startsWith("```")) {
+        const start = index;
+        index += 1;
+        while (index < lines.length && !lines[index].trim().startsWith("```")) {
+          index += 1;
+        }
+        if (index < lines.length) index += 1;
+        blocks.push(lines.slice(start, index).join("\n"));
+        continue;
+      }
+
+      if (isHeading(line) || isRule(line) || isQuote(line)) {
+        blocks.push(line);
+        index += 1;
+        continue;
+      }
+
+      if (isBullet(line) || isNumbered(line)) {
+        const ordered = isNumbered(line);
+        const start = index;
+        index += 1;
+        while (index < lines.length) {
+          const next = lines[index];
+          if (!next.trim()) break;
+          const continues =
+            (ordered ? isNumbered(next) : isBullet(next)) ||
+            /^\s{2,}\S/.test(next);
+          if (!continues) break;
+          index += 1;
+        }
+        blocks.push(lines.slice(start, index).join("\n"));
+        continue;
+      }
+
+      const start = index;
+      while (index < lines.length) {
+        const next = lines[index];
+        if (
+          !next.trim() ||
+          next.trim().startsWith("```") ||
+          isHeading(next) ||
+          isRule(next) ||
+          isQuote(next) ||
+          isBullet(next) ||
+          isNumbered(next)
+        ) {
+          break;
+        }
+        index += 1;
+      }
+      if (index === start) index += 1;
+      blocks.push(lines.slice(start, index).join("\n"));
+    }
+    return blocks;
+  }
+
+  function renderSource(text) {
     if (!text) return "";
     const lines = String(text).replace(/\r\n/g, "\n").split("\n");
     const out = [];
@@ -154,5 +238,20 @@
     return out.join("\n");
   }
 
+  function renderBlocks(text) {
+    return splitBlocks(text).map(function (source) {
+      return { source: source, html: renderSource(source) };
+    });
+  }
+
+  function render(text) {
+    return renderBlocks(text)
+      .map(function (block) {
+        return block.html;
+      })
+      .join("\n");
+  }
+
   globalThis.renderMarkdown = render;
+  globalThis.renderMarkdownBlocks = renderBlocks;
 })();
