@@ -404,6 +404,12 @@ npm run build:web   # regenerate web/prism.js from web/highlight-src.js
 CI (`.github/workflows/ci.yml`) runs typecheck, tests, and the Electron/web
 bundles on pushes to `main` and on pull requests.
 
+## Research
+
+- [Agent harnesses and agent teams](docs/harness-research.md) — a
+  source-code-informed survey of eleven coding harnesses, the orchestration
+  patterns they converge on, and a concrete team-mode design for this project.
+
 ## Design notes
 
 - The provider interface is deliberately Anthropic-shaped (content blocks,
