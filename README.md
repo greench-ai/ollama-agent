@@ -316,6 +316,8 @@ permission engine.
 node dist/acp.mjs --model qwen3:8b --cwd /path/to/project --mode acceptEdits
 ```
 
+The per-user install also provides `ollama-agent-acp` with the same arguments.
+
 Point an ACP client (Zed, Neovim, Emacs) at that command. ACP `mcpServers` from
 the client are not consumed; the server uses the local MCP config. Advertised
 session modes are `default`, `acceptEdits`, `plan`, and
