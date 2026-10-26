@@ -581,14 +581,16 @@ Wine; the macOS zip builds unsigned; dmg and signing require macOS.
 
 ## Settings and MCP servers
 
-The Settings dialog (sidebar → Settings) has General, MCP Servers, Agents,
-Rewind, Background, and About tabs. The `MCP: add servers` / `MCP n/n connected`
-footer is also a shortcut to the MCP Servers tab.
+The Settings dialog (sidebar → Settings) has General, Connectors, MCP Servers,
+Agents, Rewind, Background, and About tabs. The `MCP: add servers` /
+`MCP n/n connected` footer is also a shortcut to the MCP Servers tab.
 
 - **General** — theme, default model, default permission mode, and whether
   reasoning is shown. Stored in `~/.local/share/ollama-agent/settings.json` and
   applied at startup and to new sessions. The header pickers change only the
   current session.
+- **Connectors** — connected-server overview with reconnect/sign-out actions,
+  plus Manage and Add MCP server shortcuts.
 - **MCP Servers** — add, edit, remove, reconnect, and sign out of MCP servers.
   Supports stdio (command, args, env, cwd) and HTTP (URL, headers, OAuth:
   none / discover / explicit endpoints). Changes are written to the active

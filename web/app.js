@@ -43,6 +43,11 @@
   const settingsError = $("settings-error");
   const mcpPathEl = $("mcp-path");
   const mcpListEl = $("mcp-list");
+  const connectorsPathEl = $("connectors-path");
+  const connectorsListEl = $("connectors-list");
+  const connectorsError = $("connectors-error");
+  const connectorsManage = $("connectors-manage");
+  const connectorsAdd = $("connectors-add");
   const mcpAdd = $("mcp-add");
   const mcpForm = $("mcp-form");
   const mcpName = $("mcp-name");
@@ -1994,7 +1999,8 @@
     for (const panel of document.querySelectorAll(".tab-panels")) {
       panel.hidden = panel.dataset.panel !== name;
     }
-    if (name === "connectors") void refreshConnectors();
+    if (name === "connectors") void refreshConnectorOverview();
+    if (name === "mcp") void refreshConnectors();
     if (name === "agents") void refreshAgents();
     if (name === "rewind") void refreshCheckpoints();
     if (name === "background") {
@@ -2639,6 +2645,134 @@
     return "unknown";
   }
 
+  function showConnectorsError(message) {
+    if (!connectorsError) return;
+    connectorsError.hidden = !message;
+    connectorsError.textContent = message || "";
+  }
+
+  function renderConnectorOverview(data) {
+    connectorsListEl.innerHTML = "";
+    const statuses = data.servers || [];
+    const configs = data.configs || {};
+    const names = new Set([
+      ...statuses.map((server) => server.name),
+      ...Object.keys(configs),
+    ]);
+    if (names.size === 0) {
+      connectorsListEl.appendChild(
+        el("div", "empty-list", "No connectors configured. Add an MCP server to get started."),
+      );
+      return;
+    }
+    for (const name of [...names].sort()) {
+      const status = statuses.find((server) => server.name === name);
+      const config = configs[name];
+      const row = el("div", "connector");
+      const main = el("div", "connector-main");
+      const title = el("div", "connector-name");
+      title.appendChild(document.createTextNode(name));
+      if (status && status.ok) {
+        title.appendChild(
+          el(
+            "span",
+            "badge ok",
+            `${status.toolCount} tool${status.toolCount === 1 ? "" : "s"}`,
+          ),
+        );
+      } else if (status) {
+        title.appendChild(el("span", "badge bad", "failed"));
+      } else {
+        title.appendChild(el("span", "badge", "not connected"));
+      }
+      main.appendChild(title);
+      main.appendChild(el("div", "connector-sub", describeConnector(config)));
+      if (status && !status.ok && status.error) {
+        main.appendChild(el("div", "connector-error", status.error));
+      }
+      row.appendChild(main);
+
+      const actions = el("div", "connector-actions");
+      const reconnect = el("button", "", "Reconnect");
+      reconnect.type = "button";
+      reconnect.addEventListener("click", async () => {
+        reconnect.disabled = true;
+        reconnect.textContent = "Connecting…";
+        try {
+          const next = await bridge.mcpReconnect(name);
+          state.mcpData = next;
+          updateMcp(next.servers || []);
+          renderConnectorOverview(next);
+          renderConnectors(next);
+          showConnectorsError("");
+        } catch (error) {
+          showConnectorsError(error instanceof Error ? error.message : String(error));
+        } finally {
+          reconnect.disabled = false;
+          reconnect.textContent = "Reconnect";
+        }
+      });
+      actions.appendChild(reconnect);
+
+      if (config && config.auth) {
+        const logout = el("button", "", "Sign out");
+        logout.type = "button";
+        logout.addEventListener("click", async () => {
+          try {
+            const next = await bridge.mcpLogout(name);
+            state.mcpData = next;
+            renderConnectorOverview(next);
+            renderConnectors(next);
+          } catch (error) {
+            showConnectorsError(error instanceof Error ? error.message : String(error));
+          }
+        });
+        actions.appendChild(logout);
+      }
+
+      if (config) {
+        const manage = el("button", "", "Manage");
+        manage.type = "button";
+        manage.addEventListener("click", () => {
+          selectTab("mcp");
+          fillConnectorForm(name, config);
+        });
+        actions.appendChild(manage);
+      }
+
+      row.appendChild(actions);
+      connectorsListEl.appendChild(row);
+    }
+  }
+
+  async function refreshConnectorOverview() {
+    showConnectorsError("");
+    try {
+      const data = await bridge.mcpList();
+      state.mcpData = data;
+      if (data.path) state.mcpPath = data.path;
+      connectorsPathEl.textContent = data.error
+        ? `${data.path} — ${data.error}`
+        : `Editing ${data.path}`;
+      updateMcp(data.servers || []);
+      renderConnectorOverview(data);
+    } catch (error) {
+      showConnectorsError(error instanceof Error ? error.message : String(error));
+    }
+  }
+
+  if (connectorsManage) {
+    connectorsManage.addEventListener("click", () => selectTab("mcp"));
+  }
+  if (connectorsAdd) {
+    connectorsAdd.addEventListener("click", () => {
+      selectTab("mcp");
+      resetConnectorForm();
+      mcpForm.hidden = false;
+      mcpName.focus();
+    });
+  }
+
   function renderConnectors(data) {
     mcpListEl.innerHTML = "";
     const statuses = data.servers || [];
@@ -2749,6 +2883,7 @@
         : `Editing ${data.path}`;
       aboutMcp.textContent = data.path || "—";
       renderConnectors(data);
+      renderConnectorOverview(data);
     } catch (error) {
       mcpPathEl.textContent = error instanceof Error ? error.message : String(error);
     }
@@ -2760,7 +2895,7 @@
   }
 
   settingsBtn.addEventListener("click", () => openModal("general"));
-  mcpEl.addEventListener("click", () => openModal("connectors"));
+  mcpEl.addEventListener("click", () => openModal("mcp"));
   modalClose.addEventListener("click", closeModal);
   modal.addEventListener("click", (event) => {
     if (event.target === modal) closeModal();
@@ -2836,6 +2971,7 @@
       mcpPathEl.textContent = `Editing ${data.path}`;
       aboutMcp.textContent = data.path || "—";
       renderConnectors(data);
+      renderConnectorOverview(data);
       resetConnectorForm();
     } catch (error) {
       showMcpError(error instanceof Error ? error.message : String(error));

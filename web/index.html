@@ -1174,7 +1174,8 @@
         </div>
         <div class="tabs">
           <button class="tab active" data-tab="general" type="button">General</button>
-          <button class="tab" data-tab="connectors" type="button">MCP Servers</button>
+          <button class="tab" data-tab="connectors" type="button">Connectors</button>
+          <button class="tab" data-tab="mcp" type="button">MCP Servers</button>
           <button class="tab" data-tab="agents" type="button">Agents</button>
           <button class="tab" data-tab="rewind" type="button">Rewind</button>
           <button class="tab" data-tab="background" type="button">Background</button>
@@ -1240,6 +1241,16 @@
         </div>
 
         <div class="tab-panels" data-panel="connectors" hidden>
+          <div class="hint" id="connectors-path">Loading connectors…</div>
+          <div class="notice error" id="connectors-error" hidden></div>
+          <div class="mcp-list" id="connectors-list"></div>
+          <div class="modal-actions">
+            <button id="connectors-manage" type="button">Manage MCP servers</button>
+            <button id="connectors-add" class="send" type="button">Add MCP server</button>
+          </div>
+        </div>
+
+        <div class="tab-panels" data-panel="mcp" hidden>
           <div class="hint" id="mcp-path">Loading MCP servers…</div>
           <div class="mcp-list" id="mcp-list"></div>
           <button class="new-chat" id="mcp-add" type="button">
