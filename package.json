@@ -34,7 +34,8 @@
     "lint": "eslint .",
     "build:web": "esbuild web/highlight-src.js --bundle --format=iife --target=chrome120 --minify --outfile=web/prism.js",
     "build:acp": "esbuild src/acp.ts --bundle --platform=node --format=esm --target=node20 --outfile=dist/acp.mjs",
-    "eval": "node scripts/eval.mts"
+    "eval": "node scripts/eval.mts",
+    "test:web": "node --test test/browser/*.test.ts"
   },
   "build": {
     "appId": "dev.local.ollamaagent",
@@ -99,6 +100,7 @@
     "electron-updater": "^6.8.11",
     "esbuild": "^0.28.2",
     "eslint": "^9.39.5",
+    "playwright": "^1.64.1",
     "prismjs": "^1.30.0",
     "typescript": "^5.6.0",
     "typescript-eslint": "^8.72.1"

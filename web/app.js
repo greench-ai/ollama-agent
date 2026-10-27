@@ -124,6 +124,8 @@
   const teamMessageInput = $("team-message-input");
   const teamMessageSend = $("team-message-send");
   const contextEl = $("context");
+  const agentStatusEl = $("agent-status");
+  const agentStatusLabel = $("agent-status-label");
   const srStatus = $("sr-status");
   const dropOverlay = $("drop-overlay");
 
@@ -818,14 +820,17 @@
     if (window.__agentEventLog.length < 500) window.__agentEventLog.push(event);
     switch (event) {
       case "start":
+        setAgentStatus("working", "Waiting for model…");
         break;
       case "text":
         if (!current) startAssistant();
         current.text += data.text || "";
+        setAgentStatus("working", "Working…");
         scheduleRender();
         break;
       case "thinking":
         if (!current) startAssistant();
+        setAgentStatus("working", "Thinking…");
         if (!state.settings.showThinking) break;
         // Reasoning ends a paragraph; the block belongs above later text.
         flushParagraph(current);
@@ -841,6 +846,7 @@
         ) {
           addArtifact(data.input.file_path);
         }
+        setAgentStatus("working", `Running ${data.name}…`);
         // Close the current paragraph so the card lands in real order.
         flushParagraph(current);
         const key = data.id || `${data.name}:${data.summary || ""}`;
@@ -872,6 +878,7 @@
           // Only clear the fallback when it is the card just patched.
           if (current && current.tool === card) current.tool = null;
         }
+        setAgentStatus("working", "Working…");
         break;
       }
       case "notice":
@@ -890,25 +897,31 @@
         break;
       case "approval":
         announce(`Approval needed for ${data.tool}.`);
+        setAgentStatus("waiting", "Waiting for approval…");
         addApproval(data);
         break;
       case "plan_approval":
         announce("Plan approval needed.");
+        setAgentStatus("waiting", "Waiting for plan approval…");
         addPlanApproval(data);
         break;
       case "subagent_start":
+        setAgentStatus("working", `Subagent ${data.name}…`);
         addNotice(`subagent ${data.name} (${data.subagentType}) · ${data.description}`);
         break;
       case "subagent_end":
+        setAgentStatus("working", "Working…");
         addNotice(`subagent ${data.name} ${data.ok ? "finished" : "failed"}`);
         break;
       case "error":
         if (!/abort/i.test(String(data.message || ""))) {
           addError(data.message);
+          setAgentStatus("error", "Error");
           announce(`Error: ${data.message}`);
         }
         break;
       case "done":
+        setAgentStatus("working", "Finishing…");
         if (data && typeof data.used === "number") {
           setContext(data.used, data.budget);
         }
@@ -1408,11 +1421,19 @@
 
   /* ---------- turn control ---------- */
 
+  function setAgentStatus(kind, label) {
+    if (!agentStatusEl) return;
+    agentStatusEl.className = `agent-status ${kind}`;
+    if (agentStatusLabel) agentStatusLabel.textContent = label;
+    agentStatusEl.title = label;
+  }
+
   function setRunning(running) {
     state.running = running;
     send.hidden = running;
     stop.hidden = !running;
     stop.disabled = false;
+    setAgentStatus(running ? "working" : "idle", running ? "Working…" : "Idle");
   }
 
   function setContext(used, budget) {
