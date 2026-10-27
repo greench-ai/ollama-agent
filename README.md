@@ -685,6 +685,10 @@ bundles on pushes to `main` and on pull requests.
 - The provider interface is deliberately Anthropic-shaped (content blocks,
   `tool_use` / `tool_result`) because it maps cleanly onto Ollama's OpenAI-style
   `tool_calls` and leaves room for other backends.
+- There is one system-prompt builder (`src/core/prompt.ts`) shared by the CLI,
+  HTTP server, ACP server, and desktop shell. It derives the advertised tool
+  list and the working rules from the tool registry actually passed to the
+  agent, so the two cannot drift apart. A test pins this.
 - No prompt caching exists in Ollama, so the agent compacts context by trimming
   old turns when the estimated token budget is exceeded.
 - Tool results are truncated before they re-enter the model context.

@@ -32,15 +32,3 @@ export async function loadProjectInstructions(
   }
   return undefined;
 }
-
-export function buildSystemPrompt(
-  cwd: string,
-  instructions?: ProjectInstructions,
-): string {
-  const base =
-    `You are a coding agent working in ${cwd}. Use absolute paths, read files ` +
-    `before editing them, prefer Read/Grep/Glob over shell equivalents, and ` +
-    `summarize what you changed when you finish.`;
-  if (!instructions) return base;
-  return `${base}\n\nProject instructions (${instructions.path}):\n${instructions.content}`;
-}

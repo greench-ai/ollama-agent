@@ -37,10 +37,10 @@ import {
 } from "../src/core/files.ts";
 import {
   assertDirectory,
-  buildSystemPrompt,
   loadProjectInstructions,
   type ProjectInstructions,
 } from "../src/core/project.ts";
+import { buildSystemPrompt } from "../src/core/prompt.ts";
 import { checkForLatestRelease } from "../src/core/updates.ts";
 import {
   agentCatalogPrompt,
@@ -400,7 +400,14 @@ async function initCore(): Promise<void> {
     permissions,
     session,
     cwd: options.cwd,
-    system: `${buildSystemPrompt(options.cwd, projectInstructions)}\n\n${agentCatalogPrompt(agentDefinitions)}`,
+    system: buildSystemPrompt({
+      cwd: options.cwd,
+      toolNames: [...allTools, ...(mcp?.tools ?? [])].map((tool) => tool.name),
+      mode: permissions.mode,
+      instructions: projectInstructions,
+      subagents: [...agentDefinitions.keys()],
+      extra: [agentCatalogPrompt(agentDefinitions)],
+    }),
     planApprover,
     agentDefinitions,
     skills,
@@ -422,7 +429,14 @@ async function initCore(): Promise<void> {
       return createBackgroundAgent({
         provider,
         tools: [...allTools, ...(mcp?.tools ?? [])],
-        system: `${buildSystemPrompt(cwd, instructions)}\n\n${agentCatalogPrompt(jobDefinitions)}`,
+        system: buildSystemPrompt({
+          cwd,
+          toolNames: [...allTools, ...(mcp?.tools ?? [])].map((tool) => tool.name),
+          mode,
+          instructions,
+          subagents: [...jobDefinitions.keys()],
+          extra: [agentCatalogPrompt(jobDefinitions)],
+        }),
         cwd,
         model: jobModel,
         mode,
@@ -919,7 +933,14 @@ function registerIpc(): void {
     agent.skills = skills;
     agent.hooks = hooks;
     agent.setSystem(
-      `${buildSystemPrompt(directory, projectInstructions)}\n\n${agentCatalogPrompt(agentDefinitions)}`,
+      buildSystemPrompt({
+        cwd: directory,
+        toolNames: agent.tools.map((tool) => tool.name),
+        mode: agent.permissions.mode,
+        instructions: projectInstructions,
+        subagents: [...agentDefinitions.keys()],
+        extra: [agentCatalogPrompt(agentDefinitions)],
+      }),
       skills,
     );
 

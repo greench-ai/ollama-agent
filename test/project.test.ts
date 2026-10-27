@@ -5,9 +5,9 @@ import path from "node:path";
 import test from "node:test";
 import {
   assertDirectory,
-  buildSystemPrompt,
   loadProjectInstructions,
 } from "../src/core/project.ts";
+import { buildSystemPrompt } from "../src/core/prompt.ts";
 import { readProjectFile } from "../src/core/files.ts";
 
 test("project instructions are discovered and injected", async () => {
@@ -18,7 +18,7 @@ test("project instructions are discovered and injected", async () => {
   assert.ok(instructions);
   assert.equal(instructions?.content, "Use tabs, not spaces.\n");
 
-  const prompt = buildSystemPrompt(root, instructions);
+  const prompt = buildSystemPrompt({ cwd: root, instructions });
   assert.match(prompt, new RegExp(root.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
   assert.match(prompt, /Project instructions/);
   assert.match(prompt, /Use tabs/);

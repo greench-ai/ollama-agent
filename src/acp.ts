@@ -20,9 +20,9 @@ import {
 import { Session } from "./core/session.ts";
 import {
   assertDirectory,
-  buildSystemPrompt,
   loadProjectInstructions,
 } from "./core/project.ts";
+import { buildSystemPrompt } from "./core/prompt.ts";
 import type { ImageAttachment } from "./core/types.ts";
 import { loadMcpConfig } from "./mcp/config.ts";
 import { McpManager } from "./mcp/manager.ts";
@@ -418,7 +418,14 @@ async function main(): Promise<void> {
         loadSkills(sessionCwd),
         HooksEngine.load(sessionCwd),
       ]);
-    const system = `${buildSystemPrompt(sessionCwd, instructions)}\n\n${agentCatalogPrompt(sessionDefinitions)}`;
+    const system = buildSystemPrompt({
+      cwd: sessionCwd,
+      toolNames: allTools.map((tool) => tool.name),
+      mode: options.mode,
+      instructions,
+      subagents: [...sessionDefinitions.keys()],
+      extra: [agentCatalogPrompt(sessionDefinitions)],
+    });
     const session = await Session.create({ cwd: sessionCwd, model });
     const acpSession: AcpSession = {
       id: session.id,

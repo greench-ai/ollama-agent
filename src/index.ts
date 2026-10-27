@@ -5,7 +5,9 @@ import { Agent } from "./core/agent.ts";
 import {
   agentCatalogPrompt,
   loadAgentDefinitions,
+  type AgentDefinition,
 } from "./core/agent-definitions.ts";
+import { buildSystemPrompt } from "./core/prompt.ts";
 import { loadSkills } from "./core/skills.ts";
 import { HooksEngine, describeHooks } from "./core/hooks.ts";
 import { formatTelemetry } from "./core/telemetry.ts";
@@ -165,23 +167,19 @@ Slash commands
   /clear  /session  /exit
 `;
 
-function systemPrompt(cwd: string): string {
-  return `You are a coding agent running in the user's terminal, powered by an Ollama model.
-
-Environment
-- Working directory: ${cwd}
-- Platform: ${process.platform}
-
-Available tools: Read, Write, Edit, MultiEdit, Bash, Glob, Grep, TodoWrite.
-
-Working rules
-- Use absolute file paths.
-- Read a file before editing it; never guess at its contents.
-- Prefer Read, Grep, and Glob over cat, find, and grep in Bash.
-- Keep changes minimal and consistent with the surrounding code.
-- Use TodoWrite for multi-step work and keep one item in progress.
-- The harness asks the user before mutating tools; do not ask for permission in prose.
-- When finished, state what changed and what you verified.`;
+function systemPrompt(
+  cwd: string,
+  toolNames: string[],
+  mode: PermissionMode,
+  agentDefinitions: Map<string, AgentDefinition>,
+): string {
+  return buildSystemPrompt({
+    cwd,
+    toolNames,
+    mode,
+    subagents: [...agentDefinitions.keys()],
+    extra: [agentCatalogPrompt(agentDefinitions)],
+  });
 }
 
 function pickModel(models: string[]): string {
@@ -361,7 +359,7 @@ async function main(): Promise<void> {
     permissions,
     session,
     cwd,
-    system: `${systemPrompt(cwd)}\n\n${agentCatalogPrompt(agentDefinitions)}`,
+    system: systemPrompt(cwd, tools.map((tool) => tool.name), permissions.mode, agentDefinitions),
     think: options.think,
     numCtx: options.numCtx,
     messages: prior,
@@ -538,7 +536,7 @@ async function main(): Promise<void> {
           skills = await loadSkills(cwd);
           agent.skills = skills;
           agent.setSystem(
-            `${systemPrompt(cwd)}\n\n${agentCatalogPrompt(agentDefinitions)}`,
+            systemPrompt(cwd, agent.tools.map((tool) => tool.name), permissions.mode, agentDefinitions),
             skills,
           );
           if (skills.size === 0) {
@@ -584,7 +582,7 @@ async function main(): Promise<void> {
           agentDefinitions = await loadAgentDefinitions(cwd);
           agent.agentDefinitions = agentDefinitions;
           agent.setSystem(
-            `${systemPrompt(cwd)}\n\n${agentCatalogPrompt(agentDefinitions)}`,
+            systemPrompt(cwd, agent.tools.map((tool) => tool.name), permissions.mode, agentDefinitions),
             agent.skills,
           );
           for (const definition of [...agentDefinitions.values()].sort((a, b) =>
