@@ -15,7 +15,111 @@ export interface OllamaConfig {
   apiKey?: string;
   /** Extra headers, merged after auth. */
   headers?: Record<string, string>;
+  /** Attempts for a retryable failure (default 4, i.e. three retries). */
+  maxAttempts?: number;
+  /** Base backoff in ms; doubles per attempt with jitter (default 250). */
+  retryBaseMs?: number;
+  /** Upper bound on a single backoff wait (default 4000). */
+  retryMaxDelayMs?: number;
 }
+
+/** Status codes worth retrying: transient server and rate-limit failures. */
+const RETRYABLE_STATUS = new Set([408, 425, 429, 500, 502, 503, 504]);
+
+/** Network-level failures Node surfaces when a socket dies mid-flight. */
+const RETRYABLE_CODES = new Set([
+  "ECONNRESET",
+  "ECONNREFUSED",
+  "ECONNABORTED",
+  "EPIPE",
+  "ETIMEDOUT",
+  "EAI_AGAIN",
+  "ENETUNREACH",
+  "ENETDOWN",
+  "EHOSTUNREACH",
+  "UND_ERR_CONNECT_TIMEOUT",
+  "UND_ERR_SOCKET",
+  "UND_ERR_HEADERS_TIMEOUT",
+]);
+
+/** An error that carries enough context to decide whether to retry it. */
+class RetryableError extends Error {
+  readonly retryAfterMs?: number;
+
+  constructor(message: string, retryAfterMs?: number) {
+    super(message);
+    this.retryAfterMs = retryAfterMs;
+  }
+}
+
+function errorCode(error: unknown): string | undefined {
+  let current: unknown = error;
+  for (let depth = 0; depth < 4 && current; depth += 1) {
+    const code = (current as { code?: unknown }).code;
+    if (typeof code === "string") return code;
+    current = (current as { cause?: unknown }).cause;
+  }
+  return undefined;
+}
+
+function isAbort(error: unknown): boolean {
+  return (
+    (error instanceof Error && error.name === "AbortError") ||
+    errorCode(error) === "ABORT_ERR"
+  );
+}
+
+/** Parse a Retry-After header into milliseconds, when it is a delta-seconds value. */
+function retryAfterFrom(headers: Headers): number | undefined {
+  const raw = headers.get("retry-after");
+  if (!raw) return undefined;
+  const seconds = Number(raw);
+  if (Number.isFinite(seconds) && seconds >= 0) return Math.min(seconds * 1000, 10_000);
+  const date = Date.parse(raw);
+  if (Number.isFinite(date)) {
+    return Math.min(Math.max(date - Date.now(), 0), 10_000);
+  }
+  return undefined;
+}
+
+/** Abortable sleep, so a cancelled turn does not wait out a backoff. */
+function sleep(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(new Error("This operation was aborted"));
+      return;
+    }
+    const timer = setTimeout(() => {
+      signal?.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    const onAbort = () => {
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", onAbort);
+      reject(new Error("This operation was aborted"));
+    };
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
+function describeNetworkError(error: unknown): string {
+  const reason = error instanceof Error ? error.message : String(error);
+  return `Could not reach Ollama (${reason}).`;
+}
+
+/**
+ * Preserve the actionable "is it running?" hint from the original error, but
+ * never re-wrap a message that already carries it.
+ */
+function wrapNetworkError(error: unknown, host: string, path: string): Error {
+  const base = error instanceof Error ? error.message : String(error);
+  if (base.startsWith("Ollama ")) return error as Error;
+  const trimmed = base.replace(/^Could not reach Ollama \(/, "").replace(/\)\.$/, "");
+  return new Error(
+    `Could not reach Ollama at ${host} (${trimmed}). Is it running? Try: ollama serve`,
+  );
+}
+
 
 type OllamaMessage = {
   role: "system" | "user" | "assistant" | "tool";
@@ -206,11 +310,17 @@ export class OllamaProvider implements Provider {
   private apiKey?: string;
   private headers: Record<string, string>;
   private contextCache = new Map<string, number | undefined>();
+  private maxAttempts: number;
+  private retryBaseMs: number;
+  private retryMaxDelayMs: number;
 
   constructor(config: OllamaConfig) {
     this.host = normalizeHost(config.host);
     this.apiKey = config.apiKey;
     this.headers = config.headers ?? {};
+    this.maxAttempts = Math.max(1, config.maxAttempts ?? 4);
+    this.retryBaseMs = Math.max(0, config.retryBaseMs ?? 250);
+    this.retryMaxDelayMs = Math.max(0, config.retryMaxDelayMs ?? 4_000);
   }
 
   get baseUrl(): string {
@@ -275,7 +385,47 @@ export class OllamaProvider implements Provider {
     return value;
   }
 
+  /** Backoff for attempt `n` (1-based): exponential, jittered, capped. */
+  private backoffMs(attempt: number, retryAfterMs?: number): number {
+    if (typeof retryAfterMs === "number") {
+      return Math.min(retryAfterMs, this.retryMaxDelayMs);
+    }
+    const exponential = this.retryBaseMs * 2 ** (attempt - 1);
+    const capped = Math.min(exponential, this.retryMaxDelayMs);
+    // Full jitter: spreads retries when several agents hit the same daemon.
+    return Math.round(capped * (0.5 + Math.random() * 0.5));
+  }
+
+  /**
+   * Send one request, retrying only failures that are safe to repeat: the
+   * connection never (or not usefully) produced a body. Auth and payload
+   * errors are terminal, and request abort is never retried.
+   */
   private async fetch(path: string, init: RequestInit): Promise<Response> {
+    const signal = init.signal ?? undefined;
+    let lastError: Error | undefined;
+
+    for (let attempt = 1; attempt <= this.maxAttempts; attempt += 1) {
+      try {
+        return await this.fetchOnce(path, init);
+      } catch (error) {
+        if (isAbort(error) || signal?.aborted) throw error;
+        const retryable =
+          error instanceof RetryableError ||
+          (error instanceof Error && error.name === "ReachError");
+        if (!retryable || attempt >= this.maxAttempts) {
+          throw wrapNetworkError(error, this.host, path);
+        }
+        lastError = wrapNetworkError(error, this.host, path);
+        const retryAfter =
+          error instanceof RetryableError ? error.retryAfterMs : undefined;
+        await sleep(this.backoffMs(attempt, retryAfter), signal);
+      }
+    }
+    throw lastError ?? new Error(`Ollama ${path} could not be reached.`);
+  }
+
+  private async fetchOnce(path: string, init: RequestInit): Promise<Response> {
     let response: Response;
     try {
       response = await fetch(`${this.host}${path}`, {
@@ -283,20 +433,29 @@ export class OllamaProvider implements Provider {
         headers: { ...this.requestHeaders(), ...(init.headers ?? {}) },
       });
     } catch (error) {
-      const reason = error instanceof Error ? error.message : String(error);
-      throw new Error(
-        `Could not reach Ollama at ${this.host} (${reason}). ` +
-          `Is it running? Try: ollama serve`,
-      );
+      if (isAbort(error)) throw error;
+      const code = errorCode(error);
+      if (code && RETRYABLE_CODES.has(code)) {
+        throw new RetryableError(describeNetworkError(error));
+      }
+      // An unrecognised transport failure is still worth one more try; a
+      // dead socket usually reads the same as an unknown code.
+      const reach = new Error(describeNetworkError(error));
+      reach.name = "ReachError";
+      throw reach;
     }
     if (!response.ok) {
       const text = (await response.text()).slice(0, 800);
-      throw new Error(
-        `Ollama ${path} returned ${response.status} ${response.statusText}: ${text}`,
-      );
+      const message = `Ollama ${path} returned ${response.status} ${response.statusText}: ${text}`;
+      if (RETRYABLE_STATUS.has(response.status)) {
+        throw new RetryableError(message, retryAfterFrom(response.headers));
+      }
+      throw new Error(message);
     }
     return response;
   }
+
+  /** The request body for a chat turn, shared by streaming and retry logic. */
 
   async *chat(req: ChatRequest): AsyncGenerator<ProviderEvent> {
     const body: Record<string, unknown> = {
