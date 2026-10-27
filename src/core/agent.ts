@@ -737,6 +737,7 @@ export class Agent {
   }
 
   private canRunConcurrently(call: ToolCall): boolean {
+    if (call.inputError) return false;
     if (!PARALLEL_SAFE_TOOLS.has(call.name)) return false;
     // Unknown tool names never reach here, but bail out defensively so a typo
     // in the allowlist cannot smuggle in a stateful tool.
@@ -783,6 +784,26 @@ export class Agent {
     const tool = this.tools.find((candidate) => candidate.name === call.name);
     if (!tool) {
       const content = `Unknown tool "${call.name}".`;
+      this.onEvent({ type: "tool_end", name: call.name, content, isError: true, id: call.id });
+      return {
+        type: "tool_result",
+        tool_use_id: call.id,
+        name: call.name,
+        content,
+        is_error: true,
+      };
+    }
+
+    // A call whose arguments could not be parsed must not run: it would fail
+    // deep inside the tool as a missing-parameter error the model cannot
+    // connect back to its own malformed JSON.
+    if (call.inputError) {
+      if (this.activeMetrics) this.activeMetrics.toolErrors += 1;
+      const content =
+        `Your call to ${call.name} could not be run. ${call.inputError}\n\n` +
+        `Re-issue the call with a single valid JSON object as its arguments, ` +
+        `using the parameter names from the tool's schema.`;
+      this.onEvent({ type: "tool_start", name: call.name, input: call.input, summary: "", id: call.id });
       this.onEvent({ type: "tool_end", name: call.name, content, isError: true, id: call.id });
       return {
         type: "tool_result",
