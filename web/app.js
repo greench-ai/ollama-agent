@@ -191,16 +191,29 @@
   }
 
   function nearBottom() {
-    return log.scrollHeight - log.scrollTop - log.clientHeight < 180;
+    return log.scrollHeight - log.scrollTop - log.clientHeight < 80;
   }
 
+  /**
+   * Follow the stream while the user is reading the bottom. Once they scroll
+   * up to read history, stop yanking them back — `follow` is only re-armed
+   * when they return to the bottom before sending again.
+   */
+  const follow = { pinned: true };
+
   function scrollIfNear() {
-    if (nearBottom()) log.scrollTop = log.scrollHeight;
+    if (!follow.pinned && !nearBottom()) return;
+    log.scrollTop = log.scrollHeight;
   }
 
   function scrollToBottom() {
     log.scrollTop = log.scrollHeight;
+    follow.pinned = true;
   }
+
+  log.addEventListener("scroll", () => {
+    follow.pinned = nearBottom();
+  });
 
   function setHasChat(has) {
     document.body.classList.toggle("has-chat", has);
@@ -294,37 +307,6 @@
       node.appendChild(wrapper);
       enhance(wrapper);
     }
-  }
-
-  function renderCurrentBlocks(target) {
-    const blocks =
-      typeof window.renderMarkdownBlocks === "function"
-        ? window.renderMarkdownBlocks(target.text)
-        : [{ html: md(target.text) }];
-    if (!target.blocks) target.blocks = [];
-    if (!target.htmls) target.htmls = [];
-    while (target.blocks.length > blocks.length) {
-      const node = target.blocks.pop();
-      if (node) node.remove();
-      target.htmls.pop();
-    }
-    blocks.forEach((block, index) => {
-      let node = target.blocks[index];
-      if (!node) {
-        node = el("div", "md-block");
-        node.innerHTML = block.html;
-        target.mdEl.appendChild(node);
-        target.blocks[index] = node;
-        target.htmls[index] = block.html;
-        enhance(node);
-        return;
-      }
-      if (target.htmls[index] !== block.html) {
-        node.innerHTML = block.html;
-        target.htmls[index] = block.html;
-        enhance(node);
-      }
-    });
   }
 
   function summarize(name, input) {
@@ -444,6 +426,14 @@
   expandBtn.addEventListener("click", () => setCollapsed(false));
 
   /* ---------- messages ---------- */
+
+  /** All prose in an assistant message, read from the DOM at click time. */
+  function messageText(wrap) {
+    return [...wrap.querySelectorAll(".md")]
+      .map((node) => (node.textContent || "").trim())
+      .filter(Boolean)
+      .join("\n\n");
+  }
 
   function addMessageActions(wrap, getText) {
     if (wrap.querySelector(".msg-actions")) return;
@@ -747,7 +737,7 @@
           .filter((block) => block.type === "text")
           .map((block) => block.text)
           .join("\n");
-        addMessageActions(wrap, () => text);
+        addMessageActions(wrap, () => messageText(wrap));
         thread.appendChild(wrap);
       }
     }
@@ -760,22 +750,30 @@
 
   function startAssistant() {
     const wrap = el("div", "msg assistant");
-    const block = el("div", "md");
-    wrap.appendChild(block);
     thread.appendChild(wrap);
     setHasChat(true);
     current = {
       wrap,
-      mdEl: block,
+      // Text accumulates in `mdEl`, which is (re)appended at the point in the
+      // message where the model is currently writing, so prose and tool cards
+      // interleave in the order they actually happened.
+      mdEl: null,
       text: "",
       thinking: null,
       tool: null,
       byId: new Map(),
       scheduled: false,
-      blocks: [],
-      htmls: [],
     };
     return current;
+  }
+
+  /** Append a fresh markdown container so following text lands after the last block. */
+  function paragraph(target) {
+    const block = el("div", "md");
+    target.wrap.appendChild(block);
+    target.mdEl = block;
+    target.shown = "";
+    return block;
   }
 
   function scheduleRender() {
@@ -784,9 +782,40 @@
     requestAnimationFrame(() => {
       if (!current) return;
       current.scheduled = false;
-      renderCurrentBlocks(current);
+      renderStreamingText(current);
       scrollIfNear();
     });
+  }
+
+  /**
+   * Finish the current paragraph: render any pending text immediately, then
+   * detach it so the next text starts a fresh paragraph after whatever block
+   * is appended next. Text is never discarded — that would drop whole
+   * sentences from the transcript.
+   */
+  function flushParagraph(target) {
+    if (target.text) {
+      if (!target.mdEl || target.wrap.lastElementChild !== target.mdEl) {
+        paragraph(target);
+      }
+      renderMarkdownInto(target.mdEl, target.text);
+    }
+    target.text = "";
+    target.mdEl = null;
+    target.shown = "";
+  }
+
+  /** Repaint only the active paragraph, so finished blocks stay untouched. */
+  function renderStreamingText(target) {
+    if (!target.text) return;
+    // Start a new paragraph whenever something else was appended after it.
+    if (!target.mdEl || target.wrap.lastElementChild !== target.mdEl) {
+      paragraph(target);
+    }
+    if (target.shown === target.text) return;
+    target.shown = target.text;
+    renderMarkdownInto(target.mdEl, target.text);
+    addMessageActions(target.wrap, () => messageText(target.wrap));
   }
 
   function handleEvent(event, data) {
@@ -802,6 +831,8 @@
       case "thinking":
         if (!current) startAssistant();
         if (!state.settings.showThinking) break;
+        // Reasoning ends a paragraph; the block belongs above later text.
+        flushParagraph(current);
         if (!current.thinking) current.thinking = addThinking(current.wrap);
         if (current.thinking) current.thinking.textContent += data.text || "";
         break;
@@ -814,6 +845,8 @@
         ) {
           addArtifact(data.input.file_path);
         }
+        // Close the current paragraph so the card lands in real order.
+        flushParagraph(current);
         const key = data.id || `${data.name}:${data.summary || ""}`;
         const card = addToolCard(
           current.wrap,
@@ -1462,8 +1495,8 @@
     } finally {
       if (current) {
         const finished = current;
-        renderCurrentBlocks(finished);
-        addMessageActions(finished.wrap, () => finished.text);
+        renderStreamingText(finished);
+        addMessageActions(finished.wrap, () => messageText(finished.wrap));
         scrollIfNear();
         finished.byId.clear();
       }

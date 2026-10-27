@@ -121,21 +121,62 @@ export function toOllamaMessages(
   return out;
 }
 
-function parseArguments(raw: unknown): Record<string, unknown> {
+const MAX_ARGUMENT_PREVIEW = 500;
+
+/**
+ * Turn a model's argument payload into a tool input object.
+ *
+ * Ollama usually sends an object, but weak local models often emit malformed
+ * or truncated JSON. Returning `{}` here used to surface as a confusing
+ * "missing required parameter" from deep inside a tool; now the failure is
+ * described so the agent can hand it back to the model to correct.
+ */
+function parseArguments(
+  raw: unknown,
+): { input: Record<string, unknown>; error?: string } {
   if (raw && typeof raw === "object" && !Array.isArray(raw)) {
-    return raw as Record<string, unknown>;
+    return { input: raw as Record<string, unknown> };
+  }
+  if (raw === undefined || raw === null) {
+    return { input: {} };
   }
   if (typeof raw === "string") {
+    const trimmed = raw.trim();
+    if (trimmed === "") return { input: {} };
     try {
-      const parsed = JSON.parse(raw);
+      const parsed = JSON.parse(trimmed);
       if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-        return parsed as Record<string, unknown>;
+        return { input: parsed as Record<string, unknown> };
       }
-    } catch {
-      // fall through to the empty input below
+      return {
+        input: {},
+        error: `Arguments must be a JSON object; got ${describeJson(parsed)}.`,
+      };
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      return {
+        input: {},
+        error:
+          `Arguments were not valid JSON (${reason}). ` +
+          `Received: ${preview(trimmed)}`,
+      };
     }
   }
-  return {};
+  return {
+    input: {},
+    error: `Arguments must be a JSON object; got ${typeof raw}.`,
+  };
+}
+
+function describeJson(value: unknown): string {
+  if (Array.isArray(value)) return "an array";
+  if (value === null) return "null";
+  return typeof value;
+}
+
+function preview(text: string): string {
+  if (text.length <= MAX_ARGUMENT_PREVIEW) return text;
+  return `${text.slice(0, MAX_ARGUMENT_PREVIEW)}… (${text.length} chars)`;
 }
 
 /** Extract the maximum context length from an Ollama /api/show payload. */
@@ -330,10 +371,12 @@ export class OllamaProvider implements Provider {
           const name = raw.function?.name;
           if (!name) continue;
           sawToolCall = true;
+          const parsed = parseArguments(raw.function?.arguments);
           const call: ToolCall = {
             id: `call_${randomUUID().slice(0, 8)}`,
             name,
-            input: parseArguments(raw.function?.arguments),
+            input: parsed.input,
+            ...(parsed.error ? { inputError: parsed.error } : {}),
           };
           yield { type: "tool_call", call };
         }

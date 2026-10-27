@@ -157,6 +157,12 @@ export interface ToolCall {
   id: string;
   name: string;
   input: Record<string, unknown>;
+  /**
+   * Set when the provider could not turn the model's argument payload into a
+   * JSON object. `input` is then empty, and the agent reports the problem back
+   * to the model instead of failing deep inside a tool.
+   */
+  inputError?: string;
 }
 
 export interface Usage {
