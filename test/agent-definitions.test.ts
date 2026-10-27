@@ -27,9 +27,28 @@ Body text.
   assert.ok(parsed);
   assert.equal(parsed?.data.name, "reviewer");
   assert.deepEqual(parsed?.data.tools, ["Read", "Grep"]);
-  assert.equal(parsed?.data.maxTurns, "12");
-  assert.equal(parsed?.data.background, "true");
+  assert.equal(parsed?.data.maxTurns, 12);
+  assert.equal(parsed?.data.background, true);
   assert.equal(parsed?.body, "Body text.");
+});
+
+test("frontmatter folds YAML block descriptions and unquotes scalars", () => {
+  const parsed = parseFrontmatter(`---
+name: "demo"
+description: >
+  First line
+  second line.
+
+  Second paragraph.
+---
+Body.
+`);
+  assert.ok(parsed);
+  assert.equal(parsed?.data.name, "demo");
+  assert.equal(
+    parsed?.data.description,
+    "First line second line.\n\nSecond paragraph.",
+  );
 });
 
 test("agent definitions validate and resolve fields", async () => {

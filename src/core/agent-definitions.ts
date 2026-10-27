@@ -132,6 +132,53 @@ export function parseFrontmatter(
     if (!match) continue;
     const key = match[1];
     const rest = match[2].trim();
+    const block = /^([>|])([+-]?)$/.exec(rest);
+    if (block) {
+      const collected: string[] = [];
+      let probe = index + 1;
+      while (probe < lines.length) {
+        const next = lines[probe];
+        if (!next.trim()) {
+          collected.push("");
+          probe += 1;
+          continue;
+        }
+        if (/^\s+/.test(next)) {
+          collected.push(next);
+          probe += 1;
+          continue;
+        }
+        break;
+      }
+      const nonEmpty = collected.filter((line) => line.trim().length > 0);
+      const indent =
+        nonEmpty.length > 0
+          ? Math.min(
+              ...nonEmpty.map((line) => /^\s*/.exec(line)?.[0].length ?? 0),
+            )
+          : 0;
+      const stripped = collected.map((line) =>
+        line.trim() ? line.slice(indent) : "",
+      );
+      if (block[1] === "|") {
+        data[key] = stripped.join("\n").trimEnd();
+      } else {
+        const paragraphs: string[][] = [];
+        let current: string[] = [];
+        for (const line of stripped) {
+          if (line.trim()) {
+            current.push(line.trim());
+          } else if (current.length > 0) {
+            paragraphs.push(current);
+            current = [];
+          }
+        }
+        if (current.length > 0) paragraphs.push(current);
+        data[key] = paragraphs.map((entry) => entry.join(" ")).join("\n\n");
+      }
+      index = probe - 1;
+      continue;
+    }
     if (!rest) {
       const list: string[] = [];
       let probe = index + 1;
@@ -143,7 +190,7 @@ export function parseFrontmatter(
       index = probe - 1;
       continue;
     }
-    data[key] = rest;
+    data[key] = parseScalar(rest);
   }
 
   return { data, body };
