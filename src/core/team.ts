@@ -97,7 +97,7 @@ export interface TeamState {
   settings: TeamSettings;
 }
 
-export interface TeamStateSnapshot extends TeamState {}
+export type TeamStateSnapshot = TeamState;
 
 export type TeamStreamKind =
   | "text"

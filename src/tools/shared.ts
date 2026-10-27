@@ -126,7 +126,7 @@ export function displayPath(target: string, cwd: string): string {
 }
 
 function escapeLiteral(text: string): string {
-  return text.replace(/[\\^$+.()|\[\]{}*?]/g, "\\$&");
+  return text.replace(/[\\^$+.()|[\]{}*?]/g, "\\$&");
 }
 
 /** Translate a glob into a RegExp. Handles **, *, ?, and {a,b}. */

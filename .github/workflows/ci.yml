@@ -17,6 +17,8 @@ jobs:
       - run: npm ci
       - name: Install PDF tooling
         run: sudo apt-get update && sudo apt-get install -y poppler-utils
+      - name: Lint
+        run: npm run lint
       - name: Typecheck
         run: npm run typecheck
       - name: Test

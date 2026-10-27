@@ -117,7 +117,6 @@ test("consecutive read-only tool calls run concurrently", async () => {
 });
 
 test("results stay in request order even when completion order differs", async () => {
-  const trace = newTrace();
   // The first call is slowest and finishes last; its result must still be first.
   const slow: Tool = {
     name: "Read",

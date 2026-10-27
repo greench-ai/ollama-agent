@@ -666,13 +666,15 @@ packaged app.
 ## Development
 
 ```bash
+npm run lint        # eslint, with type-aware rules (no-floating-promises)
 npm run typecheck   # tsc --noEmit
-npm test            # 47 tests, including a server integration test with a mock Ollama
+npm test            # 149 tests, including a server integration test with a mock Ollama
+npm run eval        # scripted agent scenarios with a fake provider
 npm run build:web   # regenerate web/prism.js from web/highlight-src.js
 ```
 
-CI (`.github/workflows/ci.yml`) runs typecheck, tests, and the Electron/web
-bundles on pushes to `main` and on pull requests.
+CI (`.github/workflows/ci.yml`) runs lint, typecheck, tests, eval, and the
+Electron/ACP/web bundles on pushes to `main` and on pull requests.
 
 ## Research
 

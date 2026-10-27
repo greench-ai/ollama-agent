@@ -1311,7 +1311,7 @@ if (!app.requestSingleInstanceLock()) {
     mainWindow.focus();
   });
 
-  app.whenReady().then(async () => {
+  void app.whenReady().then(async () => {
     try {
       await initCore();
     } catch (error) {

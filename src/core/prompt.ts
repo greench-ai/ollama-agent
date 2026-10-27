@@ -120,7 +120,7 @@ function rulesSection(has: (name: string) => boolean): string {
   return ["Working rules", ...rules.map((rule) => `- ${rule}`)].join("\n");
 }
 
-function modeSection(mode: PermissionMode, toolNames: string[]): string {
+function modeSection(mode: PermissionMode): string {
   switch (mode) {
     case "plan":
       return (
@@ -176,7 +176,7 @@ export function buildSystemPrompt(options: SystemPromptOptions): string {
     );
   }
 
-  sections.push(modeSection(mode, toolNames));
+  sections.push(modeSection(mode));
 
   const available = new Set(toolNames);
   sections.push(rulesSection((name) => available.has(name)));

@@ -143,6 +143,7 @@ function parseOptions(argv: string[]): ServerOptions {
                      [--mcp-config PATH] [--no-mcp]
 `);
         process.exit(0);
+        break;
       default:
         throw new Error(`Unknown argument "${arg}". Try --help.`);
     }
@@ -193,7 +194,7 @@ async function main(): Promise<void> {
 
   let settings = await loadSettings();
   const models = await provider.listModels();
-  let model =
+  const model =
     options.model ?? process.env.OLLAMA_MODEL ?? settings.model ?? models[0]?.name;
   if (!model) {
     console.error("No models found. Pull one first, e.g. ollama pull qwen3:8b");

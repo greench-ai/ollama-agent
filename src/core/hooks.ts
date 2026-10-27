@@ -173,6 +173,8 @@ function runCommand(
     });
     let output = "";
     let settled = false;
+    // Assigned below and read by `finish`, which can run before assignment.
+    // eslint-disable-next-line prefer-const
     let timer: NodeJS.Timeout | undefined;
     const finish = (code: number) => {
       if (settled) return;

@@ -111,7 +111,7 @@ function describeNetworkError(error: unknown): string {
  * Preserve the actionable "is it running?" hint from the original error, but
  * never re-wrap a message that already carries it.
  */
-function wrapNetworkError(error: unknown, host: string, path: string): Error {
+function wrapNetworkError(error: unknown, host: string, _path: string): Error {
   const base = error instanceof Error ? error.message : String(error);
   if (base.startsWith("Ollama ")) return error as Error;
   const trimmed = base.replace(/^Could not reach Ollama \(/, "").replace(/\)\.$/, "");

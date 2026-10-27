@@ -11,5 +11,5 @@
     "lib": ["ES2023"],
     "types": ["node"]
   },
-  "include": ["src/**/*.ts", "test/**/*.ts", "electron/**/*.ts"]
+  "include": ["src/**/*.ts", "test/**/*.ts", "electron/**/*.ts", "scripts/**/*.mts"]
 }

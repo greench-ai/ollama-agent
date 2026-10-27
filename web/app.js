@@ -733,10 +733,6 @@
       }
       flush();
       if (wrap.childElementCount > 0) {
-        const text = blocks
-          .filter((block) => block.type === "text")
-          .map((block) => block.text)
-          .join("\n");
         addMessageActions(wrap, () => messageText(wrap));
         thread.appendChild(wrap);
       }

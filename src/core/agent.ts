@@ -6,7 +6,6 @@ import type {
   Provider,
   SubagentRequest,
   SubagentResult,
-  SubagentType,
   Tool,
   ToolCall,
   ToolContext,
@@ -26,7 +25,7 @@ import {
 } from "./agent-definitions.ts";
 import { compactMessages, estimateMessages } from "./tokens.ts";
 import { Session } from "./session.ts";
-import { TeamManager, type TeamAgentEvent, type TeamEvent } from "./team.ts";
+import { TeamManager, type TeamEvent } from "./team.ts";
 import { memberTeamTools, TEAM_TOOL_NAMES } from "../tools/team.ts";
 import { withSkillCatalog, type SkillDefinition } from "./skills.ts";
 import { CheckpointStore } from "./checkpoints.ts";
@@ -117,8 +116,6 @@ export interface AgentOptions {
   teamsEnabled?: boolean;
   onEvent?: (event: AgentEvent) => void;
 }
-
-const DEFAULT_MAX_TOKENS = 24_000;
 
 /**
  * Tools that only read state and can safely run concurrently. This is an
@@ -414,8 +411,8 @@ export class Agent {
     const baseTools = this.tools.filter(
       (tool) => !TEAM_TOOL_NAMES.has(tool.name) && tool.name !== "ToolSearch",
     );
-    let manager: TeamManager | undefined;
-    manager = new TeamManager({
+    // `createAgent` closes over this, so it needs an explicit type.
+    const manager: TeamManager = new TeamManager({
       leadModel: this.model,
       baseTools,
       memberTools: memberTeamTools,
