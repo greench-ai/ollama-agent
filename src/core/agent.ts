@@ -129,6 +129,34 @@ const DEFAULT_MAX_TOKENS = 24_000;
  */
 const PARALLEL_SAFE_TOOLS = new Set(["Read", "Glob", "Grep", "Skill"]);
 
+/**
+ * Tools whose repeated identical calls are meaningful progress rather than a
+ * stalled loop: a team board changes between polls, and TodoWrite legitimately
+ * re-sends the whole list.
+ */
+const REPETITION_EXEMPT_TOOLS = new Set([
+  "TodoWrite",
+  "TeamStatus",
+  "TeamAwait",
+  "TeamReview",
+  "TeamTask",
+]);
+
+/** Identical calls allowed before the harness intervenes on the next repeat. */
+const MAX_IDENTICAL_CALLS = 2;
+
+/** Key-order-independent JSON, so equal inputs always hash alike. */
+function stableStringify(value: unknown): string {
+  if (value === null || typeof value !== "object") return JSON.stringify(value) ?? "null";
+  if (Array.isArray(value)) return `[${value.map(stableStringify).join(",")}]`;
+  const entries = Object.entries(value as Record<string, unknown>)
+    .filter(([, entry]) => entry !== undefined)
+    .sort(([a], [b]) => a.localeCompare(b));
+  return `{${entries
+    .map(([key, entry]) => `${JSON.stringify(key)}:${stableStringify(entry)}`)
+    .join(",")}}`;
+}
+
 export class Agent {
   provider: Provider;
   model: string;
@@ -172,6 +200,8 @@ export class Agent {
   private baseSystem: string;
   private teamsEnabled: boolean;
   private subagentCounter = 0;
+  /** `tool:stable-input` → how many times the model has issued that exact call. */
+  private callCounts = new Map<string, number>();
   private onEvent: (event: AgentEvent) => void;
 
   constructor(options: AgentOptions) {
@@ -713,6 +743,42 @@ export class Agent {
     return this.tools.some((tool) => tool.name === call.name);
   }
 
+  /**
+   * Count an identical (tool, input) pair and decide whether to short-circuit
+   * it. Weak local models often re-issue a call verbatim after a confusing
+   * result; without this they burn the whole turn budget and report nothing.
+   */
+  private noteCall(
+    name: string,
+    input: Record<string, unknown>,
+  ): { blocked: boolean; attempt: number; summary: string } {
+    const summary = summarizeToolInput(name, input);
+    if (REPETITION_EXEMPT_TOOLS.has(name)) {
+      return { blocked: false, attempt: 0, summary };
+    }
+    const key = `${name}:${stableStringify(input)}`;
+    const attempt = (this.callCounts.get(key) ?? 0) + 1;
+    this.callCounts.set(key, attempt);
+    return { blocked: attempt > MAX_IDENTICAL_CALLS, attempt, summary };
+  }
+
+  private repeatGuidance(name: string, attempt: number): string {
+    const base =
+      `Blocked by the harness: you have already called ${name} with these ` +
+      `exact arguments ${attempt - 1} time(s), and the result is unchanged. ` +
+      `Repeating it will not produce a different answer.\n\n`;
+    if (name === "TeamStatus") {
+      return base; // unreachable while exempt, kept for clarity
+    }
+    return (
+      base +
+      `What to do next: either act on the tool output already in this ` +
+      `conversation, try a genuinely different approach (different arguments, ` +
+      `a different tool, or read a different part of the file), or stop and ` +
+      `tell the user what is blocking you.`
+    );
+  }
+
   private async executeTool(call: ToolCall): Promise<ToolResultBlock> {
     const tool = this.tools.find((candidate) => candidate.name === call.name);
     if (!tool) {
@@ -722,6 +788,21 @@ export class Agent {
         type: "tool_result",
         tool_use_id: call.id,
         name: call.name,
+        content,
+        is_error: true,
+      };
+    }
+
+    const repeat = this.noteCall(tool.name, call.input);
+    if (repeat.blocked) {
+      if (this.activeMetrics) this.activeMetrics.toolErrors += 1;
+      const content = this.repeatGuidance(tool.name, repeat.attempt);
+      this.onEvent({ type: "tool_start", name: tool.name, input: call.input, summary: repeat.summary, id: call.id });
+      this.onEvent({ type: "tool_end", name: tool.name, content, isError: true, id: call.id });
+      return {
+        type: "tool_result",
+        tool_use_id: call.id,
+        name: tool.name,
         content,
         is_error: true,
       };
