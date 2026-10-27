@@ -188,10 +188,14 @@ export interface ModelInfo {
   parameterSize?: string;
   quantization?: string;
   capabilities?: string[];
+  /** Model maximum context length, when /api/show reports it. */
+  contextWindow?: number;
 }
 
 export interface Provider {
   readonly name: string;
   chat(req: ChatRequest): AsyncGenerator<ProviderEvent>;
   listModels(): Promise<ModelInfo[]>;
+  /** Optional model context-length lookup (Ollama /api/show). */
+  contextWindow?(model: string): Promise<number | undefined>;
 }

@@ -353,6 +353,8 @@ async function main(): Promise<void> {
     },
   });
 
+  await agent.refreshContextWindow();
+
   const background = await BackgroundManager.load({
     createAgent: async ({ cwd, model: jobModel, mode, title }) => {
       const [instructions, jobDefinitions, jobSkills, jobHooks] =
@@ -389,6 +391,8 @@ async function main(): Promise<void> {
 
   const statePayload = () => ({
     model: agent.model,
+    contextWindow: agent.contextWindow,
+    contextBudget: agent.contextUsage().budget,
     mode: permissions.mode,
     cwd: options.cwd,
     session: agent.session.file,
@@ -797,6 +801,7 @@ async function main(): Promise<void> {
         if (typeof body.model === "string" && body.model.trim()) {
           agent.model = body.model.trim();
           agent.session.model = agent.model;
+          await agent.refreshContextWindow();
         }
         if (typeof body.mode === "string") {
           if (!PERMISSION_MODES.includes(body.mode as PermissionMode)) {
@@ -805,7 +810,12 @@ async function main(): Promise<void> {
           }
           permissions.setMode(body.mode as PermissionMode);
         }
-        json(response, 200, { model: agent.model, mode: permissions.mode });
+        json(response, 200, {
+          model: agent.model,
+          contextWindow: agent.contextWindow,
+          contextBudget: agent.contextUsage().budget,
+          mode: permissions.mode,
+        });
         return;
       }
 
@@ -841,6 +851,7 @@ async function main(): Promise<void> {
         if (loaded.model) {
           agent.model = loaded.model;
           agent.session.model = loaded.model;
+          await agent.refreshContextWindow();
         }
         json(response, 200, {
           ...statePayload(),

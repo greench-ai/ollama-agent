@@ -65,6 +65,18 @@ node dist/cli.mjs --model qwen3:8b
 /exit                      quit
 ```
 
+## Model context window
+
+At startup and before each turn, the agent asks Ollama `/api/show` for the
+selected model's maximum context length. That value is sent as `options.num_ctx`
+and used for the context HUD and compaction budget. Cloud models therefore use
+their full window; for example `deepseek-v4.1-flash:cloud` reports 1,048,576
+tokens. Compaction starts at 75% of the window to leave room for the response.
+
+`--num-ctx <n>` (CLI) overrides the detected value. The current model, detected
+window, and budget are included in `/api/state`; the CLI and web HUD show the
+full model window after a turn.
+
 ## Permission modes
 
 | mode | behavior |
@@ -415,7 +427,7 @@ HTTP API:
 
 | Method | Path | Purpose |
 | --- | --- | --- |
-| GET | `/api/state` | model, mode, cwd, session, MCP servers/resources/prompts |
+| GET | `/api/state` | model, context window/budget, mode, cwd, session, MCP servers/resources/prompts |
 | GET | `/api/models` | models and the current one |
 | POST | `/api/state` | change `model` and/or `mode` |
 | POST | `/api/chat` | run a turn; body `{message, images?}`; streams SSE events |

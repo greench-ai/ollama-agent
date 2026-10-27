@@ -138,11 +138,33 @@ function parseArguments(raw: unknown): Record<string, unknown> {
   return {};
 }
 
+/** Extract the maximum context length from an Ollama /api/show payload. */
+export function contextWindowFromShow(body: {
+  model_info?: Record<string, unknown>;
+  context_length?: unknown;
+}): number | undefined {
+  const lengths = Object.entries(body.model_info ?? {})
+    .filter(
+      ([key, value]) =>
+        (key === "context_length" || key.endsWith(".context_length")) &&
+        typeof value === "number" &&
+        Number.isFinite(value) &&
+        value > 0,
+    )
+    .map(([, value]) => value as number);
+  if (typeof body.context_length === "number" && body.context_length > 0) {
+    lengths.push(body.context_length);
+  }
+  if (lengths.length === 0) return undefined;
+  return Math.floor(Math.max(...lengths));
+}
+
 export class OllamaProvider implements Provider {
   readonly name = "ollama";
   private host: string;
   private apiKey?: string;
   private headers: Record<string, string>;
+  private contextCache = new Map<string, number | undefined>();
 
   constructor(config: OllamaConfig) {
     this.host = normalizeHost(config.host);
@@ -191,13 +213,25 @@ export class OllamaProvider implements Provider {
     const body = (await response.json()) as {
       capabilities?: string[];
       details?: { parameter_size?: string; quantization_level?: string };
+      model_info?: Record<string, unknown>;
+      context_length?: unknown;
     };
+    const contextWindow = contextWindowFromShow(body);
     return {
       name: model,
       capabilities: body.capabilities ?? [],
       parameterSize: body.details?.parameter_size,
       quantization: body.details?.quantization_level,
+      contextWindow,
     };
+  }
+
+  async contextWindow(model: string): Promise<number | undefined> {
+    if (this.contextCache.has(model)) return this.contextCache.get(model);
+    const info = await this.showModel(model);
+    const value = info?.contextWindow;
+    this.contextCache.set(model, value);
+    return value;
   }
 
   private async fetch(path: string, init: RequestInit): Promise<Response> {

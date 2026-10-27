@@ -708,7 +708,12 @@ async function main(): Promise<void> {
           if (name) {
             agent.model = name;
             session.model = name;
-            console.log(style.dim(`model → ${name}`));
+            const contextWindow = await agent.refreshContextWindow();
+            console.log(
+              style.dim(
+                `model → ${name}${contextWindow ? ` · context ${contextWindow.toLocaleString()}` : ""}`,
+              ),
+            );
           } else {
             console.log(style.dim(`model: ${agent.model}`));
           }

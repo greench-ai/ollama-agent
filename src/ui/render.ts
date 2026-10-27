@@ -148,8 +148,16 @@ export class TerminalRenderer {
   endTurn(context?: { used: number; budget: number }): void {
     if (context) {
       const percent = Math.round((context.used / context.budget) * 100);
+      const format = (value: number) =>
+        value >= 1_000_000
+          ? `${(value / 1_000_000).toFixed(1)}M`
+          : value >= 1000
+            ? `${(value / 1000).toFixed(1)}k`
+            : String(value);
       process.stdout.write(
-        style.dim(`  — context ~${context.used} / ${context.budget} tokens (${percent}%)\n`),
+        style.dim(
+          `  — context ~${format(context.used)} / ${format(context.budget)} tokens (${percent}%)\n`,
+        ),
       );
     }
     this.turnHasContent = false;

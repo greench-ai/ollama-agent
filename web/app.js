@@ -1381,7 +1381,11 @@
       return;
     }
     const format = (value) =>
-      value >= 1000 ? `${(value / 1000).toFixed(1)}k` : String(value);
+      value >= 1_000_000
+        ? `${(value / 1_000_000).toFixed(2)}M`
+        : value >= 1000
+          ? `${(value / 1000).toFixed(1)}k`
+          : String(value);
     contextEl.textContent = `ctx ${format(used)} / ${format(budget)}`;
     contextEl.title = `${used} of ${budget} tokens used (estimated)`;
     contextEl.classList.toggle("warn", used / budget > 0.85);

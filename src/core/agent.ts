@@ -109,6 +109,8 @@ export interface AgentOptions {
   toolSearch?: boolean;
   /** Tool-count threshold before MCP tools are deferred (default 20). */
   toolSearchThreshold?: number;
+  /** Override detected model context length. */
+  contextWindow?: number;
   /** Per-run telemetry store; create one by default, false disables it. */
   telemetry?: TelemetryStore | false;
   /** Lead agents create a team manager unless disabled. */
@@ -128,6 +130,9 @@ export class Agent {
   system: string;
   think: boolean;
   numCtx?: number;
+  contextWindow?: number;
+  private contextModel?: string;
+  private contextOverride?: number;
   temperature?: number;
   maxTurns: number;
   maxToolResultChars: number;
@@ -187,6 +192,7 @@ export class Agent {
         : new TelemetryStore(this.session.id);
     this.hooks = options.hooks;    this.think = options.think ?? false;
     this.numCtx = options.numCtx;
+    this.contextOverride = options.contextWindow;
     this.temperature = options.temperature;
     this.maxTurns = options.maxTurns ?? 40;
     this.maxToolResultChars = options.maxToolResultChars ?? 30_000;
@@ -215,9 +221,34 @@ export class Agent {
     this.configureDeferredTools();
   }
 
+  private effectiveNumCtx(): number | undefined {
+    return this.numCtx ?? this.contextOverride ?? this.contextWindow;
+  }
+
   private contextBudget(): number {
-    const window = this.numCtx ?? 32_768;
+    const window = this.effectiveNumCtx() ?? 32_768;
     return Math.max(4_000, Math.floor(window * 0.75));
+  }
+
+  /**
+   * Ask the provider for the selected model's maximum context length. Called
+   * before a turn so cloud models such as deepseek-v4.1-flash use their full
+   * 1M window, and before compaction decides its budget.
+   */
+  async refreshContextWindow(): Promise<number | undefined> {
+    if (!this.provider.contextWindow) return this.contextWindow;
+    if (this.contextModel === this.model) return this.contextWindow;
+    try {
+      const window = await this.provider.contextWindow(this.model);
+      this.contextWindow =
+        window && Number.isFinite(window) && window > 0
+          ? Math.floor(window)
+          : undefined;
+      this.contextModel = this.model;
+    } catch {
+      // Keep the previous value; the provider may be temporarily unavailable.
+    }
+    return this.contextWindow;
   }
 
   /** Replace the tool set (for example after MCP reload) and re-apply deferral. */
@@ -423,6 +454,7 @@ export class Agent {
     images?: ImageAttachment[],
     files?: FileAttachment[],
   ): Promise<void> {
+    await this.refreshContextWindow();
     const metrics: RunMetrics = {
       startedAt: Date.now(),
       turns: 0,
@@ -543,7 +575,7 @@ export class Agent {
           })),
           system: this.system,
           temperature: this.temperature,
-          numCtx: this.numCtx,
+          numCtx: this.effectiveNumCtx(),
           think: this.think,
           signal: this.signal,
         })) {
@@ -964,7 +996,10 @@ export class Agent {
 
   /** Approximate context usage for the status line. */
   contextUsage(): { used: number; budget: number } {
-    return { used: estimateMessages(this.messages), budget: this.contextBudget() };
+    return {
+      used: estimateMessages(this.messages),
+      budget: this.effectiveNumCtx() ?? 32_768,
+    };
   }
 
   /** Clear the conversation (used by the CLI's /clear). */

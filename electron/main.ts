@@ -234,6 +234,8 @@ const planApprover = async (
 function statePayload() {
   return {
     model: agent.model,
+    contextWindow: agent.contextWindow,
+    contextBudget: agent.contextUsage().budget,
     mode: permissions.mode,
     cwd: options.cwd,
     session: agent.session.file,
@@ -403,6 +405,8 @@ async function initCore(): Promise<void> {
     hooks,
     onEvent: forwardAgentEvent,
   });
+
+  await agent.refreshContextWindow();
 
   background = await BackgroundManager.load({
     createAgent: async ({ cwd, model: jobModel, mode }) => {
@@ -587,11 +591,12 @@ function registerIpc(): void {
 
   ipcMain.handle(
     "agent:set-state",
-    (_event, payload: unknown) => {
+    async (_event, payload: unknown) => {
       const patch = asRecord(payload);
       if (typeof patch.model === "string" && patch.model.trim()) {
         agent.model = patch.model.trim();
         agent.session.model = agent.model;
+        await agent.refreshContextWindow();
       }
       if (typeof patch.mode === "string") {
         if (!PERMISSION_MODES.includes(patch.mode as PermissionMode)) {
@@ -599,7 +604,12 @@ function registerIpc(): void {
         }
         permissions.setMode(patch.mode as PermissionMode);
       }
-      return { model: agent.model, mode: permissions.mode };
+      return {
+        model: agent.model,
+        contextWindow: agent.contextWindow,
+        contextBudget: agent.contextUsage().budget,
+        mode: permissions.mode,
+      };
     },
   );
 
@@ -722,6 +732,7 @@ function registerIpc(): void {
     if (loaded.model) {
       agent.model = loaded.model;
       agent.session.model = loaded.model;
+      await agent.refreshContextWindow();
     }
     return { ...statePayload(), title: loaded.title, messages: loaded.messages };
   });
