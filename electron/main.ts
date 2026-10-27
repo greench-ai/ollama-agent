@@ -300,6 +300,7 @@ function forwardAgentEvent(event: AgentEvent): void {
         name: event.name,
         summary: event.summary,
         input: event.input,
+        id: event.id,
       });
       break;
     case "tool_end":
@@ -307,6 +308,7 @@ function forwardAgentEvent(event: AgentEvent): void {
         name: event.name,
         content: event.content,
         isError: event.isError,
+        id: event.id,
       });
       break;
     case "notice":

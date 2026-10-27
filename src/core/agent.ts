@@ -120,6 +120,15 @@ export interface AgentOptions {
 
 const DEFAULT_MAX_TOKENS = 24_000;
 
+/**
+ * Tools that only read state and can safely run concurrently. This is an
+ * explicit allowlist rather than `mutating: false`, because several
+ * non-mutating tools still have ordering requirements: ToolSearch swaps the
+ * tool registry, TodoWrite rewrites the session todo list, ExitPlanMode
+ * changes the permission mode, and spawning a Task or teammate starts a run.
+ */
+const PARALLEL_SAFE_TOOLS = new Set(["Read", "Glob", "Grep", "Skill"]);
+
 export class Agent {
   provider: Provider;
   model: string;
@@ -649,11 +658,7 @@ export class Agent {
         return;
       }
 
-      const results: ToolResultBlock[] = [];
-      for (const call of toolCalls) {
-        const result = await this.executeTool(call);
-        results.push(result);
-      }
+      const results = await this.runToolCalls(toolCalls);
       const resultMessage: Message = { role: "user", content: results };
       this.messages.push(resultMessage);
       await this.session.appendMessage(resultMessage);
@@ -666,6 +671,46 @@ export class Agent {
       type: "notice",
       text: `Stopped after ${this.maxTurns} turns without a final answer.`,
     });
+  }
+
+  /**
+   * Run one turn's tool calls, returning results in the same order the model
+   * requested them (the provider pairs results to calls positionally).
+   *
+   * Consecutive read-only calls run concurrently; anything else is a barrier
+   * that preserves ordering, so a Write still completes before the Read that
+   * follows it. Tool events gain an `id` so hosts can pair start/end across
+   * interleaved runs instead of relying on adjacency.
+   */
+  private async runToolCalls(calls: ToolCall[]): Promise<ToolResultBlock[]> {
+    const results: (ToolResultBlock | undefined)[] = new Array(calls.length);
+    let index = 0;
+    while (index < calls.length) {
+      if (this.canRunConcurrently(calls[index])) {
+        const batch: number[] = [];
+        while (index < calls.length && this.canRunConcurrently(calls[index])) {
+          batch.push(index);
+          index += 1;
+        }
+        const settled = await Promise.all(
+          batch.map((position) => this.executeTool(calls[position])),
+        );
+        batch.forEach((position, offset) => {
+          results[position] = settled[offset];
+        });
+        continue;
+      }
+      results[index] = await this.executeTool(calls[index]);
+      index += 1;
+    }
+    return results as ToolResultBlock[];
+  }
+
+  private canRunConcurrently(call: ToolCall): boolean {
+    if (!PARALLEL_SAFE_TOOLS.has(call.name)) return false;
+    // Unknown tool names never reach here, but bail out defensively so a typo
+    // in the allowlist cannot smuggle in a stateful tool.
+    return this.tools.some((tool) => tool.name === call.name);
   }
 
   private async executeTool(call: ToolCall): Promise<ToolResultBlock> {

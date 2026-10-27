@@ -770,6 +770,7 @@
       text: "",
       thinking: null,
       tool: null,
+      byId: new Map(),
       scheduled: false,
       blocks: [],
       htmls: [],
@@ -804,7 +805,7 @@
         if (!current.thinking) current.thinking = addThinking(current.wrap);
         if (current.thinking) current.thinking.textContent += data.text || "";
         break;
-      case "tool_start":
+      case "tool_start": {
         if (!current) startAssistant();
         if (
           ["Write", "Edit", "MultiEdit"].includes(data.name) &&
@@ -813,7 +814,8 @@
         ) {
           addArtifact(data.input.file_path);
         }
-        current.tool = addToolCard(
+        const key = data.id || `${data.name}:${data.summary || ""}`;
+        const card = addToolCard(
           current.wrap,
           data.name,
           data.summary,
@@ -821,15 +823,28 @@
           false,
           true,
         );
+        // Read-only calls may interleave; keep a slot per call so each
+        // tool_end patches the card it belongs to.
+        current.byId.set(key, card);
+        current.tool = card;
         scrollIfNear();
         break;
-      case "tool_end":
-        if (current && current.tool) {
-          current.tool.pre.textContent = data.content || "(no output)";
-          if (data.isError) current.tool.details.classList.add("error");
-          current.tool = null;
+      }
+      case "tool_end": {
+        const key = data.id || `${data.name}:${data.summary || ""}`;
+        const card =
+          (current && current.byId.get(key)) ||
+          (current && current.tool) ||
+          null;
+        if (current) current.byId.delete(key);
+        if (card) {
+          card.pre.textContent = data.content || "(no output)";
+          if (data.isError) card.details.classList.add("error");
+          // Only clear the fallback when it is the card just patched.
+          if (current && current.tool === card) current.tool = null;
         }
         break;
+      }
       case "notice":
         addNotice(data.text);
         break;
@@ -1450,6 +1465,7 @@
         renderCurrentBlocks(finished);
         addMessageActions(finished.wrap, () => finished.text);
         scrollIfNear();
+        finished.byId.clear();
       }
       current = null;
       setRunning(false);

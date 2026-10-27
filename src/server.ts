@@ -306,6 +306,7 @@ async function main(): Promise<void> {
             name: event.name,
             summary: event.summary,
             input: event.input,
+            id: event.id,
           });
           break;
         case "tool_end":
@@ -313,6 +314,7 @@ async function main(): Promise<void> {
             name: event.name,
             content: event.content,
             isError: event.isError,
+            id: event.id,
           });
           break;
         case "notice":
