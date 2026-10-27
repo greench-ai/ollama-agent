@@ -1,5 +1,8 @@
 import type { Message, ToolResultBlock, ContentBlock } from "./types.ts";
 
+/** Longest recap of the original request kept across compaction. */
+const MAX_RECAP_CHARS = 400;
+
 /** Rough token estimate: ~4 characters per token for English and code. */
 export function estimateTokens(text: string): number {
   if (!text) return 0;
@@ -43,6 +46,11 @@ function hasText(message: Message): boolean {
  * tool_use is never separated from its tool_result. Very large tool results are
  * truncated first, because they are the usual cause of overflow and dropping
  * them loses less than dropping whole turns.
+ *
+ * The first user message is always kept when dropping turns: it states the
+ * task, and compaction used to discard it, leaving the model working on a goal
+ * it could no longer see. Its text is also carried forward as a recap note so
+ * the reason for the work survives even if the original is later dropped.
  */
 export function compactMessages(
   messages: Message[],
@@ -77,19 +85,74 @@ export function compactMessages(
     return changed ? { ...message, content } : message;
   });
 
-  // Pass 2: drop whole turns from the front.
-  while (estimateMessages(current) > maxTokens && current.length > 4) {
-    let cut = -1;
-    for (let i = 1; i < current.length - 1; i += 1) {
-      if (current[i].role === "user" && hasText(current[i])) {
-        cut = i;
-        break;
+  // Pass 2: drop whole turns from the front while keeping the opening request.
+  //
+  // The opening message is held aside, the rest is trimmed, and then the
+  // opening message plus a short recap are put back at the head. Doing it in
+  // that order keeps the cut simple: the recap is never itself a cut point, so
+  // each iteration removes at least one message and the loop must terminate.
+  const pinned = openingMessage(current);
+  if (pinned && pinned === current[0]) {
+    const tail = current.slice(1);
+    let trimmed = tail;
+    while (estimateMessages([pinned, ...trimmed]) > maxTokens && trimmed.length > 3) {
+      let cut = -1;
+      for (let i = 1; i < trimmed.length - 1; i += 1) {
+        if (trimmed[i].role === "user" && hasText(trimmed[i])) {
+          cut = i;
+          break;
+        }
       }
+      if (cut <= 0) break;
+      dropped += cut;
+      trimmed = trimmed.slice(cut);
     }
-    if (cut <= 0) break;
-    dropped += cut;
-    current = current.slice(cut);
+    const recap = recapMessage(pinned);
+    current = recap ? [pinned, recap, ...trimmed] : [pinned, ...trimmed];
   }
 
   return { messages: current, dropped, truncated };
+}
+
+/** The first user message that carries actual prose, i.e. the stated task. */
+function openingMessage(messages: Message[]): Message | undefined {
+  for (const message of messages) {
+    if (message.role === "user" && hasText(message)) {
+      // Only the text blocks; tool results are noise when recapping.
+      const text = message.content
+        .filter((block): block is Extract<ContentBlock, { type: "text" }> =>
+          block.type === "text",
+        )
+        .map((block) => block.text)
+        .join("\n")
+        .trim();
+      if (!text) return undefined;
+      return message;
+    }
+  }
+  return undefined;
+}
+
+/** A short note reminding the model what the original request was. */
+export function recapMessage(original: Message): Message | undefined {
+  if (original.role !== "user") return undefined;
+  const text = original.content
+    .filter((block): block is Extract<ContentBlock, { type: "text" }> =>
+      block.type === "text",
+    )
+    .map((block) => block.text)
+    .join(" ")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!text) return undefined;
+  const trimmed = text.length > MAX_RECAP_CHARS ? `${text.slice(0, MAX_RECAP_CHARS)}…` : text;
+  return {
+    role: "user",
+    content: [
+      {
+        type: "text",
+        text: `[Context note: the original request was "${trimmed}". Earlier turns were dropped to fit the context window; continue toward that goal.]`,
+      },
+    ],
+  };
 }
